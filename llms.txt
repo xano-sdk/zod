@@ -1,0 +1,148 @@
+# @xano-sdk/zod
+
+> A Xano SDK toolchain module. Once installed, every write of a project's
+> `routes.gen.ts` also exports `ROUTE_SCHEMAS`, `CHANNEL_SCHEMAS` and
+> `MESSAGE_SCHEMAS`: one zod 4 schema per endpoint, realtime channel and
+> realtime message input, keyed exactly like the SDK's `RouteInputs`,
+> `ChannelInputs` and `MessageInputs` types and checked against them at
+> typecheck. It adds nothing to the workspace and registers nothing.
+
+## Install
+
+```bash
+npx xanosdk marketplace install zod
+```
+
+Peers: `@xano/sdk` `>=1.0.6 <2.0.0` and `zod` `^4.0.0`. Built and tested against
+`@xano/sdk` 1.0.6 and `zod` 4.6.5. The suite renders a real `routes.gen.ts`
+through the SDK, typechecks it with real zod (with and without
+`exactOptionalPropertyTypes`), parses with it, and bundles it. That covers the
+tested versions; the rest of each range is declared, not CI-verified.
+
+What `install` does: installs `@xano-sdk/zod`; adds `zod@^4.0.0` as a direct
+dependency through the project's package manager (npm, yarn, pnpm or bun; a `zod`
+the project already declares is left alone); records the module in
+`package.json` `"xanosdk"`; regenerates `xano/routes.gen.ts` if the project has
+one. With no `routes.gen.ts` yet, the first `npm run xano:routes` writes it.
+
+By hand: `npm install @xano-sdk/zod` under npm 7+ (which installs the peer).
+Under yarn or pnpm, also add `zod@^4.0.0` yourself, or run
+`npx xanosdk marketplace reinstall @xano-sdk/zod`, which adds it.
+
+No questions, no options, nothing in `xano/index.ts`.
+
+## Quickstart
+
+```bash
+npx xanosdk marketplace install zod
+npm run xano:routes     # xanosdk routes ./xano/index.ts --emit xano/routes.gen.ts
+npm run xano:check      # starts with the same command plus --strict; fails if routes.gen.ts is stale
+```
+
+```ts
+import { ROUTES, ROUTE_SCHEMAS, MESSAGE_SCHEMAS, routePath, type RouteInputs } from "../xano/routes.gen";
+
+const body: RouteInputs["POST listings"] = ROUTE_SCHEMAS["POST listings"].parse(draft);
+await fetch(BASE + routePath("POST listings"), {
+  method: ROUTES["POST listings"].verb,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+const msg = MESSAGE_SCHEMAS["rooms/{room_id} send"].safeParse(payload);
+if (!msg.success) showErrors(msg.error.issues);
+```
+
+`parse` returns the input unchanged; a schema checks and never rewrites.
+
+## Exports
+
+In the project's `routes.gen.ts` (generated, inside
+`// xanosdk:begin @xano-sdk/zod` ... `// xanosdk:end @xano-sdk/zod`):
+
+- `ROUTE_SCHEMAS`: keyed like `ROUTES` / `RouteInputs`, `"<VERB> <name>"` or
+  `"<group>:<VERB> <name>"` when a route name is ambiguous. Validates request
+  inputs, path params included.
+- `CHANNEL_SCHEMAS`: keyed like `CHANNELS` / `ChannelInputs`
+  (`"rooms/{room_id}"`, `"<server>:<path>"` when ambiguous). Validates path
+  params.
+- `MESSAGE_SCHEMAS`: keyed like `MessageInputs`, `"<channel key> <message name>"`.
+  Validates the payload.
+- `__ZodSchemaChecks` (type only): one entry per key; a schema whose `z.output`
+  is not the same type as the core type for its key fails typecheck on that
+  line. Two-way: a missing optional key fails too.
+
+The file imports `{ z } from "zod"` and never `@xano/sdk`. Each map is built in a
+`/* @__PURE__ */` factory, so a bundle importing only `ROUTES`, `routePath` or
+types contains no zod.
+
+From the package itself (rarely needed): `renderZodSection(inputs)` and
+`PEER_RANGE` from `@xano-sdk/zod`; the plugin the CLI loads from
+`@xano-sdk/zod/plugin`.
+
+## What a schema checks
+
+- Types: `text`/`date` → `z.string()`; `email` → string with the server's email
+  format (`""` passes); `password` → string; `int` → `z.int()`; `decimal` →
+  `z.number()`; `timestamp` → number (epoch ms); `bool` → `z.boolean()`; `uuid` →
+  any 8-4-4-4-12 hex or `""`; `enum` → `z.enum` / `z.literal`; `json` →
+  `z.unknown()`; `vector` → `z.array(z.number())`; `object` → nested `z.object`;
+  `tableRef` → the id (`z.int()` or uuid); `dbLink` → the linked table's columns
+  spread into the object; file upload → any non-null value; image/video/audio/
+  attachment → the stored file-reference object; geo → `{ type, data }`.
+- Flags: list → `z.array(...)` with list `min`/`max`; nullable → `.nullable()`
+  on the list, not the elements; not required → `.optional()`. A required input
+  with a default stays required (no `.default()`).
+- Methods checked: `min`/`max` (length on text, value on numbers), `startsWith`,
+  `pattern`, `alphaOk`/`digitOk`/`ok`, `prevent`, and password `minAlpha`,
+  `minLowerAlpha`, `minUpperAlpha`, `minDigit`, `minSymbol`. Messages match the
+  server's.
+- Text checks run on the value as the server measures it: trimmed (text unless
+  `notrim`; password always) and case-folded by `lower`/`upper` before the
+  whitelist, `prevent` and `pattern`. The value sent is not changed.
+
+## Constraints for agents (read before using)
+
+- **Do not edit inside the `// xanosdk:begin @xano-sdk/zod` block.** It is
+  regenerated on every write of `routes.gen.ts`. Change the def's inputs and run
+  `npm run xano:routes`.
+- **Do not hand-write zod schemas for Xano inputs.** Import them from
+  `routes.gen.ts` by the same key as `RouteInputs` / `ChannelInputs` /
+  `MessageInputs`.
+- **A `__ZodSchemaChecks` error is drift, not a typing puzzle.** Regenerate with
+  `npm run xano:routes`; if it persists, the module and SDK disagree. Report it;
+  do not cast, suppress or delete the check.
+- **Transforms are NOT applied:** `trim`, `lower`, `upper`, password `salt`. The
+  server applies them. Do not add `.trim()`, `.toLowerCase()` or similar to the
+  value you send to "match" the server.
+- **Skipped, still checked by the server:** a `pattern` using syntax JavaScript
+  reads differently (`\A`, `\z`, `\h`, `\p{...}`, POSIX classes, inline flags,
+  atomic groups, flags with no JS equivalent); a `vector`'s size; disabled or
+  unknown methods.
+- **Password: the server skips strength checks for `""` and `"0"`; the schema
+  does not.** With a strength rule set, the schema rejects those two values.
+- **The server is the authority.** Handle a server rejection even when `parse`
+  passed.
+- **Inputs only.** No response schemas; use `InferResponse` on an `import type`
+  of the def.
+- **`zod` must be installed in the project.** `routes.gen.ts` imports it. After
+  a hand install under yarn or pnpm, add `zod@^4.0.0` or run
+  `npx xanosdk marketplace reinstall @xano-sdk/zod`.
+- **zod 4 classic only.** Do not install zod 3 or use `zod/mini` for these
+  schemas.
+- **On module failure:** a non-strict write keeps this module's previous block
+  and warns `routes.module-failed`; `routes --emit --strict` (`xano:check`) fails.
+  Fix the cause rather than committing a file written without the module.
+- **Keep one module version per project** (commit the lockfile). The block names
+  the version that wrote it, and a different version on another machine shows as
+  drift in `xano:check`.
+- **Remove with `npx xanosdk marketplace remove @xano-sdk/zod`**, which drops the
+  block. `zod` stays a project dependency; remove it only if nothing else
+  imports it.
+
+## Docs
+
+- [README.md](README.md): the full reference, including what is not checked and
+  "Read before production".
+- The SDK's own guidance on `routes.gen.ts` and its input types:
+  `node_modules/@xano/sdk/llms/client.md`.
