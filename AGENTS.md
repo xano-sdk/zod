@@ -193,6 +193,15 @@ Patch only: `1.0.x`, whatever the change. No bump unless the owner asks.
    ```
 
 7. Draft the GitHub release from `.github/RELEASE_TEMPLATE.md`.
+   Publishing it (not a prerelease) fires `.github/workflows/release-slack.yml`,
+   which posts the release to Slack through the org secret `SLACK_WEBHOOK_URL`.
+   The job first runs `.github/scripts/test_slack_release_message.py`, which
+   renders `RELEASE_TEMPLATE.md` through the real builder, so a malformed
+   payload fails the workflow instead of reaching Slack. The builder and its
+   test match `sdk-dev`'s except for the repo and package names; port fixes
+   between them. Check a draft locally with
+   `cd .github/scripts && python3 test_slack_release_message.py`. To re-announce,
+   run the workflow by hand with the tag.
 8. Marketplace: the listing (slug `zod`, `kind: "toolchain"`,
    `npm_package: "@xano-sdk/zod"`, no `includes`, empty `register_snippet`) is
    seed data in the Release Manager repo, added by PR and synced with its
