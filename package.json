@@ -1,0 +1,79 @@
+{
+  "name": "@xano-sdk/zod",
+  "version": "1.0.0",
+  "description": "Generates zod schemas for every endpoint, realtime channel, and realtime message input in a Xano SDK project's routes.gen.ts, from the same description as its TypeScript input types, so the two cannot drift.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Xano",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "xano",
+    "xanosdk",
+    "zod",
+    "validation",
+    "toolchain",
+    "codegen"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xano-sdk/zod.git"
+  },
+  "homepage": "https://github.com/xano-sdk/zod#readme",
+  "bugs": {
+    "url": "https://github.com/xano-sdk/zod/issues"
+  },
+  "sideEffects": false,
+  "xanosdk": {
+    "kind": "toolchain",
+    "plugin": "./dist/plugin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "llms.txt"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "prepublishOnly": "npm run build",
+    "release": "npm publish --access public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@xano/sdk": ">=1.0.6 <2.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@xano/sdk": "1.0.5",
+    "eslint": "^9.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^3.2.6",
+    "zod": "4.6.5"
+  }
+}
