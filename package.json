@@ -69,7 +69,7 @@
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@xano/sdk": "1.0.5",
+    "@xano/sdk": "1.0.6",
     "esbuild": "^0.27.7",
     "eslint": "^9.0.0",
     "tsup": "^8.0.0",

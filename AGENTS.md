@@ -32,18 +32,15 @@ npm pack --dry-run  # the tarball: dist/, README.md, llms.txt, LICENSE, package.
 
 Before committing: `npm run typecheck && npm run lint && npm test`.
 
-**The emitted-file suites need an SDK with the `routesManifest` hook** (see
-"The SDK-pipeline helper" below). Until that SDK is on npm, install it from a
-tarball built in `sdk-dev`:
+To test against unreleased SDK work, install a tarball built in `sdk-dev`
+without touching the pin:
 
 ```bash
 (cd ../sdk-dev && npm run build && npm pack --pack-destination /tmp/sdk-pack)
 npm install --no-save /tmp/sdk-pack/xano-sdk-<version>.tgz
 ```
 
-`--no-save` keeps `package.json` and the lockfile on the published pin. A later
-plain `npm install` or `npm ci` puts the published SDK back, and those suites
-then fail by name.
+A later plain `npm install` or `npm ci` puts the pinned SDK back.
 
 ## Layout
 
@@ -135,23 +132,24 @@ Each one fails in a USER's project, not here, unless a test catches it.
 The SDK enforces its no-engine-internals rule with a list of forbidden names. That
 list is itself made of engine internals, so committing a copy to a public repo
 would publish exactly what it guards. The check runs from `sdk-dev` instead, over
-this repo's files, before every release (see Release, step 4).
+this repo's files, before every release (see Release, step 3).
 
 ## The SDK-pipeline helper
 
 `test/helpers/sdk-pipeline.ts` drives the INSTALLED SDK's own planner and
 composer, so the emitted-file suites test what a user's project actually gets,
 not a hand-rolled composition. Those functions are not on any published subpath,
-so the helper scans `node_modules/@xano/sdk/dist/` for a `routes-manifest-*.js`
-chunk exporting `planRouteManifest`, `renderPlannedManifest` and
-`composeRoutesManifest`, and fails by name when none does.
+so the helper finds each of `planRouteManifest`, `renderPlannedManifest` and
+`composeRoutesManifest` in `node_modules/@xano/sdk/dist/` by the module that
+defines and exports it (they need not share a chunk), and fails naming any it
+cannot find.
 
 Consequences:
 
 - The suites need an SDK build that contains the `routesManifest` hook: the
-  first release with it (the peer floor) or a tarball of `sdk-dev` (Commands
-  above). The published `1.0.5` pin in `devDependencies` does not have it.
-- A refactor in the SDK that renames those exports or the chunk breaks the
+  peer floor (`1.0.6`, the `devDependencies` pin) or later, or a tarball of
+  `sdk-dev` (Commands above).
+- A refactor in the SDK that renames those functions breaks the
   helper, not the module. Fix the helper, not the suites.
 
 ## The peer range
@@ -166,8 +164,8 @@ Consequences:
 - `zod`: `^4.0.0`, the classic API the emitted code uses (`z.int()`,
   `z.guid()`, `.check()`, `z.core.ParsePayload`). The SDK adds it to the user's
   project as a direct dependency on install.
-- `devDependencies` pin the TESTED versions exactly, no caret: `zod` `4.6.5`;
-  `@xano/sdk` moves to the floor release once it is on npm. README.md and
+- `devDependencies` pin the TESTED versions exactly, no caret: `zod` `4.6.5`,
+  `@xano/sdk` `1.0.6`. README.md and
   llms.txt state both the ranges and the tested versions. Change all three in the
   same commit.
 
@@ -175,16 +173,14 @@ Consequences:
 
 Patch only: `1.0.x`, whatever the change. No bump unless the owner asks.
 
-1. The SDK release carrying the `routesManifest` hook is on npm. Move the
-   `@xano/sdk` devDependency pin to it (exact), `npm install`, and drop the
-   `--no-save` tarball step from Commands.
-2. README.md and llms.txt carry the current peer ranges and tested versions.
-3. `npm run typecheck && npm run lint && npm test && npm run build`.
-4. From `sdk-dev`, run the SDK's source-leak check over `README.md`, `llms.txt`,
+1. README.md and llms.txt carry the current peer ranges and tested versions,
+   matching the `devDependencies` pins.
+2. `npm run typecheck && npm run lint && npm test && npm run build`.
+3. From `sdk-dev`, run the SDK's source-leak check over `README.md`, `llms.txt`,
    `AGENTS.md`, `SECURITY.md`, `package.json`, `src/` and `test/`. Zero hits.
-5. `npm pack --dry-run` shows `dist/` (the two entries, their shared chunk and
+4. `npm pack --dry-run` shows `dist/` (the two entries, their shared chunk and
    `.d.ts` files, no `.map`), `README.md`, `llms.txt`, `LICENSE`, `package.json`, and nothing else.
-6. From a green tree on `main`:
+5. From a green tree on `main`:
 
    ```bash
    npm version patch -m "chore(release): %s"
@@ -192,7 +188,7 @@ Patch only: `1.0.x`, whatever the change. No bump unless the owner asks.
    git push --follow-tags
    ```
 
-7. Draft the GitHub release from `.github/RELEASE_TEMPLATE.md`.
+6. Draft the GitHub release from `.github/RELEASE_TEMPLATE.md`.
    Publishing it (not a prerelease) fires `.github/workflows/release-slack.yml`,
    which posts the release to Slack through the org secret `SLACK_WEBHOOK_URL`.
    The job first runs `.github/scripts/test_slack_release_message.py`, which
@@ -202,7 +198,7 @@ Patch only: `1.0.x`, whatever the change. No bump unless the owner asks.
    between them. Check a draft locally with
    `cd .github/scripts && python3 test_slack_release_message.py`. To re-announce,
    run the workflow by hand with the tag.
-8. Marketplace: the listing (slug `zod`, `kind: "toolchain"`,
+7. Marketplace: the listing (slug `zod`, `kind: "toolchain"`,
    `npm_package: "@xano-sdk/zod"`, no `includes`, empty `register_snippet`) is
    seed data in the Release Manager repo, added by PR and synced with its
    `marketplace:sync -- --write`. Verify with `xanosdk marketplace details zod`,
