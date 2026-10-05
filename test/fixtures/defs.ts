@@ -7,6 +7,13 @@
  * maps to zod checks and the ones it deliberately skips.
  */
 import { apiGroup, f, input, query, realtimeChannel, realtimeMessage, realtimeServer, table, workspace } from "@xano/sdk";
+import type { MethodArg, TextMethod } from "@xano/sdk";
+
+/**
+ * Text methods the SDK's authoring types do not list but a stored workspace can
+ * carry (`prevent`, `notrim`), passed through to the input description as written.
+ */
+const storedMethods = (...methods: string[]): MethodArg<TextMethod>[] => methods as MethodArg<TextMethod>[];
 
 const api = apiGroup({ name: "api", canonical: "api1" });
 const v1 = apiGroup({ name: "v1", canonical: "v1c" });
@@ -145,7 +152,24 @@ export const validated = query({
     qty: input.int({ required: true, default: 1, methods: ["min:1", "max:10"] }),
     ratio: input.decimal({ methods: ["min:0", "max:1"] }),
     tags: input.list(input.text({ methods: ["max:5"] }), { list: { min: 1, max: 3 } }),
+    raw: input.text({ methods: storedMethods("notrim", "max:3") }),
+    policy: input.password({ methods: ["minSymbol:1", "minLowerAlpha:1", "minAlpha:2"] }),
+    blocked: input.text({ methods: storedMethods("lower", "prevent:admin", "prevent:") }),
+    shouted: input.text({ methods: storedMethods("upper", "prevent:ROOT") }),
+    pair: input.text({ methods: ["pattern:/^.{2}$/"] }),
+    pair_u: input.text({ methods: ["pattern:/^.{2}$/u"] }),
+    anything: input.text({ methods: ["pattern:##"] }),
   },
+  stack: [],
+  response: {},
+});
+
+/** An input named `__proto__`: an own key, never the object's prototype. */
+export const proto = query({
+  name: "proto",
+  verb: "POST",
+  apiGroup: api,
+  input: { ["__proto__"]: input.int({ required: true }), other: input.text() },
   stack: [],
   response: {},
 });
@@ -184,7 +208,7 @@ export function routeInputWorkspace() {
   return workspace("ws")
     .registerTables([users, docs])
     .registerApiGroups([api, v1, v2])
-    .registerQueries([scalars, lists, signup, validated, nothing, vehiclesV1, vehiclesV2])
+    .registerQueries([scalars, lists, signup, validated, proto, nothing, vehiclesV1, vehiclesV2])
     .registerRealtimeServers([chat])
     .registerRealtimeChannels([rooms, lobby])
     .registerRealtimeMessages([send, ping]);

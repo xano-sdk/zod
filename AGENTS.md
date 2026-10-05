@@ -80,7 +80,9 @@ Each one fails in a USER's project, not here, unless a test catches it.
   renderer has a twin in `render.ts`: `required` decides `.optional()`; a list's
   `z.array` wraps before `.nullable()`; `json`/`unknown` scalars drop `nullable`
   (the core writes `unknown | null` as `unknown`); an optional key named after
-  an `Object.prototype` member admits the inherited member; file refs, uploads
+  an `Object.prototype` member admits the inherited member (and the object's
+  `__zodOwnKeys` check takes that member back off the parsed value); an input
+  named `__proto__` is a computed key, never a bare one; file refs, uploads
   and geo values are written structurally because the file cannot import the
   SDK's types; dbLink columns spread into the surrounding object, a key reached
   twice is the union of its declarations, and unknown columns leave the object
@@ -94,7 +96,7 @@ Each one fails in a USER's project, not here, unless a test catches it.
   fails on a too-strict schema, a wrong type, a missing optional key and a
   required key made optional. Keep all four.
 - **Pure factories, pure helpers.** Each map is `/* @__PURE__ */ (() => ({...}))()`
-  and `__zodText` is a pure top-level arrow. `routes.gen.ts` exists so a frontend
+  and `__zodText` / `__zodOwnKeys` are pure top-level arrows. `routes.gen.ts` exists so a frontend
   addresses the backend without a runtime; a top-level `z.object(...)` call is a
   side effect a bundler must keep, and it would put zod into every bundle that
   imports `routePath`. `emitted-bundle` asserts that bundle has no zod, against a
@@ -102,13 +104,18 @@ Each one fails in a USER's project, not here, unless a test catches it.
 - **Check, never transform.** A schema must return the value it was given.
   `trim`/`lower`/`upper`/`salt` are the server's to apply; they only decide what
   copy the checks run on. No `.trim()`, `.toLowerCase()`, `.default()`,
-  `.transform()` or coercion in an emitted schema.
+  `.transform()` or coercion in an emitted schema. `__zodOwnKeys` is not an
+  exception: it removes a key zod itself copied off `Object.prototype`, so the
+  parsed value has exactly the keys it was given.
 - **Don't guess a check.** A pattern is translated only when the two regex
   dialects agree on every construct in it, and it is compiled here before it is
   emitted. Anything else is left to the server. A guessed check that rejects a
   value the server accepts is worse than none. The same goes for a vector's
-  size, and for the server's habit of skipping password strength checks on `""`
-  and `"0"`: that one is deliberately NOT mirrored, and the README says so.
+  size, and for a pattern without the `u` flag against a non-ASCII value (the
+  server matches bytes there), which the helper leaves to the server. The
+  module's contract is to accept everything the server accepts, so the server's
+  shortcuts are mirrored: a password of `""` or `"0"` passes before any check,
+  and an email is always trimmed.
 - **The hook is pure and synchronous.** `routesManifest` touches no filesystem
   and returns the same text for the same input; every writer of `routes.gen.ts`
   must produce identical bytes or `xano:check` flips between them. No clock, no

@@ -172,10 +172,11 @@ stays required. There is no `.default()`, because the core type requires the key
 `min`, `max`, `startsWith`, `pattern`, the character whitelist (`alphaOk`,
 `digitOk`, `ok`), `prevent`, and on a password `minAlpha`, `minLowerAlpha`,
 `minUpperAlpha`, `minDigit` and `minSymbol` are checked, and they produce the
-messages the server returns.
+messages the server returns. As on the server, a password of `""` or `"0"`
+passes without any check.
 
 They run on the value **as the server measures it**. The server trims a text
-input (unless `notrim`) and a password before checking, and case-folds a text
+input (unless `notrim`), a password and an email before checking, and case-folds a text
 input with `lower` / `upper` before the whitelist, `prevent` and `pattern`. The
 schema runs its checks on a trimmed, folded copy and leaves the value itself
 alone, so `"  @abc  "` passes a `max:6` and is sent with its spaces.
@@ -192,9 +193,11 @@ alone, so `"  @abc  "` passes a `max:6` and is sent with its spaces.
   `\p{...}`, POSIX classes, inline flags, atomic groups, or a flag JavaScript has
   no equivalent for is skipped, and the server still checks it.
 - **A vector's size is not enforced.** Any array of numbers passes.
-- **A password's empty-value exception is not mirrored.** The server skips its
-  password strength checks for `""` and `"0"`. The schema applies them, so with a
-  strength rule set it rejects those two values.
+- **An input named `__proto__` is not checked.** Recent zod 4 releases skip that
+  key on purpose, so the server alone validates it.
+- **A pattern without the `u` flag is not checked against a non-ASCII value.**
+  Without `u` the server matches the value byte by byte, which JavaScript cannot
+  reproduce, so such a value is left to the server. ASCII values are checked.
 - **Disabled methods and methods the module does not know produce no check.**
 
 ## When the module fails

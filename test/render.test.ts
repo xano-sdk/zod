@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { transform } from "esbuild";
 import type { InputDescription, InputMethod } from "@xano/sdk/plugin";
 import { pcreToRegex, renderZodSection } from "../src/render.js";
 
@@ -29,7 +30,7 @@ describe("renderZodSection: one expression per described type", () => {
     ["bool", { type: "bool" }, "z.boolean()"],
     ["json", { type: "json" }, "z.unknown()"],
     ["uuid", { type: "uuid" }, 'z.guid().or(z.literal(""))'],
-    ["email", { type: "email" }, "z.string().check(__zodText({ email: true }))"],
+    ["email", { type: "email" }, "z.string().check(__zodText({ trim: true, email: true }))"],
     ["password", { type: "password" }, "z.string()"],
     ["vector", { type: "vector", size: 3 }, "z.array(z.number())"],
     ["tableRef int", { type: "tableRef", keyType: "int", table: "t" }, "z.int()"],
@@ -132,8 +133,21 @@ describe("renderZodSection: methods", () => {
 
   it("maps the password policy as one count each, on the value the engine always trims", () => {
     expect(row([inp("v", { type: "password" }, { required: true, methods: [m("min", "8"), m("minDigit", "1"), m("minSymbol", "2")] })], "v")).toBe(
-      'v: z.string().check(__zodText({ trim: true, min: 8, atLeast: [[/[0-9]/g, 1, "numbers"], [/[!-\\/:-@[-`{-~]/g, 2, "punctuation symbols"]] })),',
+      'v: z.string().check(__zodText({ trim: true, password: true, min: 8, atLeast: [[/[0-9]/g, 1, "numbers"], [/[!-\\/:-@[-`{-~]/g, 2, "punctuation symbols"]] })),',
     );
+  });
+
+  it("an email is always trimmed: the server trims it whatever its methods", () => {
+    expect(row([inp("v", { type: "email" }, { required: true, methods: [m("notrim")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ trim: true, email: true })),",
+    );
+  });
+
+  it("maps each blocked phrase, skipping an empty one, on the folded value", () => {
+    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("lower"), m("prevent", "admin"), m("prevent", ""), m("prevent", "root")] })], "v")).toBe(
+      'v: z.string().check(__zodText({ trim: true, fold: "lower", prevent: ["admin","root"] })),',
+    );
+    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("prevent", "")] })], "v")).toBe("v: z.string(),");
   });
 
   it.each([
@@ -248,6 +262,31 @@ describe("renderZodSection: the section", () => {
   });
 });
 
+describe("renderZodSection: keys that are not plain property names", () => {
+  it("writes an input named __proto__ as a computed key, so it is an own key of the shape", () => {
+    const { source } = renderZodSection({ routes: [{ key: "POST x", inputs: [inp("__proto__", { type: "int" }, { required: true })] }], channels: [], messages: [] });
+    expect(source).toContain('    ["__proto__"]: z.int(),\n');
+  });
+
+  it("drops a key whose value was read off Object.prototype, so parse returns only the keys it was given", () => {
+    const { source } = renderZodSection({
+      routes: [{ key: "POST x", inputs: [inp("toString", { type: "text" }), inp("valueOf", { type: "text" }, { required: true }), inp("constructor", { type: "int" })] }],
+      channels: [],
+      messages: [],
+    });
+    expect(source).toContain('  }).check(__zodOwnKeys(["toString","constructor"])),');
+    expect(source).toContain("const __zodOwnKeys =");
+    const plain = renderZodSection({ routes: [{ key: "POST x", inputs: [inp("a", { type: "text" })] }], channels: [], messages: [] }).source;
+    expect(plain).not.toContain("__zodOwnKeys");
+  });
+});
+
+/** A regex literal as `pcreToRegex` writes it, compiled. */
+function compile(literal: string): RegExp {
+  const end = literal.lastIndexOf("/");
+  return new RegExp(literal.slice(1, end), literal.slice(end + 1));
+}
+
 describe("pcreToRegex", () => {
   it.each([
     ["^[a-z0-9-]+$", "/^[a-z0-9-]+$/"],
@@ -273,5 +312,57 @@ describe("pcreToRegex", () => {
     ["/a++/", "possessive quantifier"],
   ])("refuses %j (%s)", (stored) => {
     expect(pcreToRegex(stored)).toBeUndefined();
+  });
+
+  it('reads a stored "0" as no pattern, as the server does', () => {
+    expect(pcreToRegex("0")).toBeUndefined();
+  });
+
+  it.each([
+    ["//", "/(?:)/"],
+    ["##", "/(?:)/"],
+    ["~~i", "/(?:)/i"],
+    ["a\\\nb", "/a\\nb/"],
+    ["/a\\\rb/", "/a\\rb/"],
+    ["/a\\\u2028b/", "/a\\u2028b/"],
+    ["/a\\\u2029b/", "/a\\u2029b/"],
+    ["/a\u2028b/", "/a\\u2028b/"],
+  ])("writes %j as a literal no line break or comment can end early", (stored, expected) => {
+    expect(pcreToRegex(stored)).toBe(expected);
+  });
+
+  it("matches what the server matches for an empty body and an escaped line break", () => {
+    expect(compile(pcreToRegex("##")!).test("anything")).toBe(true);
+    expect(compile(pcreToRegex("~~i")!).test("")).toBe(true);
+    expect(compile(pcreToRegex("a\\\nb")!).test("a\nb")).toBe(true);
+    expect(compile(pcreToRegex("a\\\nb")!).test("ab")).toBe(false);
+    expect(compile(pcreToRegex("/a\\\u2028b/")!).test("a\u2028b")).toBe(true);
+  });
+
+  it("emits a section that still parses when a pattern has an empty body or an escaped line break", async () => {
+    const patterns = ["//", "##", "~~i", "a\\\nb", "/a\\\rb/", "/a\\\u2028b/", "/a\\\u2029b/"];
+    const { source } = renderZodSection({
+      routes: [{ key: "POST x", inputs: patterns.map((p, i) => inp(`p${i}`, { type: "text" }, { required: true, methods: [m("pattern", p)] })) }],
+      channels: [],
+      messages: [],
+    });
+    const { code } = await transform(source, { loader: "ts", format: "esm" });
+    for (let i = 0; i < patterns.length; i++) expect(code).toContain(`p${i}: z.string().check(`);
+    expect(source).not.toMatch(/pattern: \/\//);
+  });
+
+  it.each([
+    [" /abc/i", "/abc/i"],
+    ["\t\n/abc/i", "/abc/i"],
+    ["/abc/i ", "/abc/i"],
+    ["/abc/ i\r\n", "/abc/i"],
+    ["  ^a", "/  ^a/"],
+  ])("reads %j as the server does: whitespace before the delimiter and among the flags is dropped", (stored, expected) => {
+    expect(pcreToRegex(stored)).toBe(expected);
+  });
+
+  it("an undelimited pattern keeps its leading whitespace", () => {
+    expect(compile(pcreToRegex("  ^a")!).test("  a")).toBe(false);
+    expect(compile(pcreToRegex(" /abc/i")!).test("ABC")).toBe(true);
   });
 });

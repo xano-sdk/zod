@@ -114,6 +114,110 @@ describe("ROUTE_SCHEMAS", () => {
     expect(route("POST lists").safeParse({ ...body, email: ["a@b.co", ""] }).success).toBe(true);
     expect(route("POST lists").safeParse({ ...body, email: ["not an email"] }).success).toBe(false);
   });
+
+  it("checks an email trimmed, as the server always trims it, and sends it untrimmed", () => {
+    const body = { text: ["a"], email: [" a@b.co ", "\ta@b.co\n", "  "] };
+    expect(route("POST lists").parse(body)).toEqual(body);
+  });
+
+  it("leaves no own key behind for an absent optional key named after an Object.prototype member", () => {
+    const body = {
+      text: "t",
+      text_default: "d",
+      bool: null,
+      timestamp: 1,
+      image: null,
+      status: "draft",
+      doc: "00000000-0000-0000-0000-000000000000",
+      address: { street: "Main" },
+      valueOf: "v",
+    };
+    const parsed = route("POST scalars").parse(body) as object;
+    expect(Object.hasOwn(parsed, "toString")).toBe(false);
+    expect(Object.hasOwn(parsed, "constructor")).toBe(false);
+    expect(parsed).toEqual(body);
+    // A key the caller did send is kept.
+    expect(route("POST scalars").parse({ ...body, toString: "s", constructor: 2 })).toEqual({ ...body, toString: "s", constructor: 2 });
+  });
+
+  it("declares an input named __proto__ as an own key of the shape", () => {
+    const schema = route("POST proto") as Schema & { shape: object };
+    expect(Object.keys(schema.shape)).toEqual(["__proto__", "other"]);
+    expect(Object.getPrototypeOf(schema.shape)).toBe(Object.prototype);
+    // Whether zod then validates a declared `__proto__` depends on the zod version; the other keys are checked either way.
+    expect(schema.safeParse({ other: 1 }).error?.issues.map((i) => i.path)).toContainEqual(["other"]);
+  });
+});
+
+describe("the text helper, run as the emitted file runs it", () => {
+  const valid = { handle: "@abc", secret: "Passw0rd", qty: 2 };
+  const schema = (): Schema => route("POST validated");
+  const check = (key: string, value: string): string[] => messages(schema(), { ...valid, [key]: value });
+
+  it("reports a short value with the server's minimum-length message, measured trimmed", () => {
+    expect(check("handle", "@a")).toEqual(["handle: Input does not meet minimum length requirement of 3 characters"]);
+    expect(check("handle", "  @a  ")).toEqual(["handle: Input does not meet minimum length requirement of 3 characters"]);
+  });
+
+  it("trims exactly the six characters the server trims: space, tab, newline, carriage return, NUL, vertical tab", () => {
+    expect(check("handle", "\0\x0B \t@abcdefg\n\r \0")).toEqual([]);
+    // Form feed and a no-break space are not trimmed: they count, and the prefix check sees them.
+    expect(check("handle", "\f@abcdefg")).toEqual([
+      "handle: Input does not meet maximum length requirement of 8 characters",
+      "handle: Invalid format detected. Expected @",
+    ]);
+    expect(check("handle", "\u00A0@abc")).toEqual(["handle: Invalid format detected. Expected @"]);
+  });
+
+  it("counts characters, not UTF-16 units: an astral character is one", () => {
+    expect(check("handle", "@abcdef\u{1F600}")).toEqual([]);
+    expect(check("handle", "@abcdefg\u{1F600}")).toEqual(["handle: Input does not meet maximum length requirement of 8 characters"]);
+  });
+
+  it("measures a notrim input raw", () => {
+    expect(check("raw", "abc")).toEqual([]);
+    expect(check("raw", "abc ")).toEqual(["raw: Input does not meet maximum length requirement of 3 characters"]);
+  });
+
+  it("reports each missing password class with the server's message", () => {
+    expect(check("policy", "12")).toEqual([
+      "policy: Weak password detected. Please use at least 1 punctuation symbols.",
+      "policy: Weak password detected. Please use at least 1 lowercase letters.",
+      "policy: Weak password detected. Please use at least 2 letters.",
+    ]);
+    expect(check("policy", "1b!")).toEqual(["policy: Weak password detected. Please use at least 2 letters."]);
+    expect(check("policy", "ab!")).toEqual([]);
+  });
+
+  it('passes a password of "" or "0" untouched, as the server does before any check', () => {
+    expect(schema().parse({ ...valid, secret: "" })).toEqual({ ...valid, secret: "" });
+    expect(schema().parse({ ...valid, secret: "0" })).toEqual({ ...valid, secret: "0" });
+    // Emptiness is judged before trimming: blanks still fail the length check.
+    expect(check("secret", "  ")).toContain("secret: Input does not meet minimum length requirement of 8 characters");
+  });
+
+  it("blocks a phrase found in the case-folded value, and sends the value as given", () => {
+    expect(check("blocked", "ADMIN")).toEqual(["blocked: Invalid characters detected."]);
+    expect(check("blocked", "xAdMiNx")).toEqual(["blocked: Invalid characters detected."]);
+    expect(schema().parse({ ...valid, blocked: "Adm" })).toEqual({ ...valid, blocked: "Adm" });
+    expect(check("shouted", "root")).toEqual(["shouted: Invalid characters detected."]);
+    expect(check("shouted", "roo")).toEqual([]);
+  });
+
+  it("leaves a non-ASCII value to the server when the pattern lacks the u flag, and checks ASCII as before", () => {
+    // Without u the server matches bytes: "é" is two of them and passes /^.{2}$/.
+    expect(check("pair", "\u00e9")).toEqual([]);
+    expect(check("pair", "ab")).toEqual([]);
+    expect(check("pair", "abc")).toEqual(["pair: Invalid pattern."]);
+    // With u both sides count characters, so the check still runs.
+    expect(check("pair_u", "\u00e9")).toEqual(["pair_u: Invalid pattern."]);
+    expect(check("pair_u", "\u00e9\u00e9")).toEqual([]);
+  });
+
+  it("an empty-body pattern matches everything", () => {
+    expect(check("anything", "")).toEqual([]);
+    expect(check("anything", "x y")).toEqual([]);
+  });
 });
 
 describe("CHANNEL_SCHEMAS and MESSAGE_SCHEMAS", () => {

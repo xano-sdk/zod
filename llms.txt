@@ -98,7 +98,7 @@ From the package itself (rarely needed): `renderZodSection(inputs)` and
   `minLowerAlpha`, `minUpperAlpha`, `minDigit`, `minSymbol`. Messages match the
   server's.
 - Text checks run on the value as the server measures it: trimmed (text unless
-  `notrim`; password always) and case-folded by `lower`/`upper` before the
+  `notrim`; password and email always) and case-folded by `lower`/`upper` before the
   whitelist, `prevent` and `pattern`. The value sent is not changed.
 
 ## Constraints for agents (read before using)
@@ -117,10 +117,12 @@ From the package itself (rarely needed): `renderZodSection(inputs)` and
   value you send to "match" the server.
 - **Skipped, still checked by the server:** a `pattern` using syntax JavaScript
   reads differently (`\A`, `\z`, `\h`, `\p{...}`, POSIX classes, inline flags,
-  atomic groups, flags with no JS equivalent); a `vector`'s size; disabled or
-  unknown methods.
-- **Password: the server skips strength checks for `""` and `"0"`; the schema
-  does not.** With a strength rule set, the schema rejects those two values.
+  atomic groups, flags with no JS equivalent); a pattern without the `u` flag
+  against a value with a non-ASCII character (the server matches bytes); a
+  `vector`'s size; disabled or unknown methods; an input named `__proto__`
+  (recent zod 4 releases skip that key on purpose).
+- **Password: `""` and `"0"` pass unchecked**, as on the server, whatever the
+  length and strength rules.
 - **The server is the authority.** Handle a server rejection even when `parse`
   passed.
 - **Inputs only.** No response schemas; use `InferResponse` on an `import type`

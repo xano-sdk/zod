@@ -100,8 +100,13 @@ const PLAIN: Readonly<Record<string, string>> = {
   ...GEO,
 };
 
-/** A property name: bare when it is an identifier, else a string literal. */
+/**
+ * A property name: bare when it is an identifier, else a string literal.
+ * `__proto__` is computed: written bare or quoted in an object literal it sets
+ * the object's prototype instead of declaring a key.
+ */
 function propertyName(name: string): string {
+  if (name === "__proto__") return '["__proto__"]';
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
 }
 
@@ -133,6 +138,14 @@ const FLAGS: Readonly<Record<string, string>> = { i: "i", m: "m", s: "s", u: "u"
  */
 const SAME_ESCAPES = new Set(["d", "D", "w", "W", "s", "S", "b", "B", "n", "r", "t", "f"]);
 
+/** A line terminator as the escape that writes it inside a regex literal. */
+const LINE_TERMINATORS: Readonly<Record<string, string>> = {
+  "\n": "\\n",
+  "\r": "\\r",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
 /**
  * A stored pattern as a JavaScript regex literal that matches what the engine's
  * PCRE matches, or `undefined` when no such literal can be written with
@@ -140,25 +153,33 @@ const SAME_ESCAPES = new Set(["d", "D", "w", "W", "s", "S", "b", "B", "n", "r", 
  * server still checks it, and a guess could refuse a value the server accepts.
  *
  * The engine takes the pattern as delimited PCRE (`/^a+$/i`) and, when it does
- * not compile that way, wraps it in `#` (`^a+$` → `#^a+$#`). Accepted: the
- * syntax the two dialects share — classes, the common escapes, groups,
- * lookaround, backreferences, named groups. Refused: any other letter escape
- * (`\A`, `\z`, `\h`, `\p`, `\Q`...), POSIX classes, inline flags, atomic and
- * other PCRE-only groups, and flags with no JavaScript counterpart (`x`, `U`,
- * `A`...). Whatever is accepted is then compiled here, so a pattern JavaScript
- * rejects is refused too.
+ * not compile that way, wraps it in `#` (`^a+$` → `#^a+$#`). PCRE skips
+ * whitespace before the opening delimiter and spaces and line breaks among the
+ * flags, so ` /abc/i ` is `/abc/i`; an undelimited pattern keeps its
+ * whitespace. The engine reads an empty pattern and `"0"` as no pattern.
+ * Accepted: the syntax the two dialects share — classes, the common escapes,
+ * groups, lookaround, backreferences, named groups. Refused: any other letter
+ * escape (`\A`, `\z`, `\h`, `\p`, `\Q`...), POSIX classes, inline flags,
+ * atomic and other PCRE-only groups, and flags with no JavaScript counterpart
+ * (`x`, `U`, `A`...). Whatever is accepted is then compiled here, so a pattern
+ * JavaScript rejects is refused too.
+ *
+ * The literal is written so nothing in the body can end it early: an empty
+ * body is `(?:)` (a bare `//` would start a line comment), and a line break,
+ * escaped or not, is written as its escape.
  */
 export function pcreToRegex(stored: string): string | undefined {
-  if (stored === "") return undefined;
+  if (stored === "" || stored === "0") return undefined;
   let body = stored;
   let pcreFlags = "";
-  const open = stored[0]!;
-  if (!/[A-Za-z0-9\\\s]/.test(open)) {
+  const delimited = stored.replace(/^[ \t\n\v\f\r]+/, "");
+  const open = delimited[0];
+  if (open !== undefined && !/[A-Za-z0-9\\\s]/.test(open)) {
     const close = BRACKETS[open] ?? open;
-    const end = stored.lastIndexOf(close);
-    if (end > 0 && /^[A-Za-z]*$/.test(stored.slice(end + 1))) {
-      body = stored.slice(1, end);
-      pcreFlags = stored.slice(end + 1);
+    const end = delimited.lastIndexOf(close);
+    if (end > 0 && /^[A-Za-z \r\n]*$/.test(delimited.slice(end + 1))) {
+      body = delimited.slice(1, end);
+      pcreFlags = delimited.slice(end + 1).replace(/[ \r\n]/g, "");
     }
   }
   let flags = "";
@@ -191,7 +212,8 @@ export function pcreToRegex(stored: string): string | undefined {
         // A single-digit backreference outside a class; octal and multi-digit forms differ.
         if (inClass || next === "0" || /[0-9]/.test(body[i + 2] ?? "")) return undefined;
       }
-      source += c + next;
+      // An escaped line break is that character, literally, in both dialects.
+      source += LINE_TERMINATORS[next] ?? c + next;
       i++;
       continue;
     }
@@ -207,13 +229,9 @@ export function pcreToRegex(stored: string): string | undefined {
       const after = body.slice(i + 2);
       if (!/^(?::|=|!|<=|<!|<[A-Za-z])/.test(after)) return undefined;
     }
-    if (c === "/") source += "\\/";
-    else if (c === "\n") source += "\\n";
-    else if (c === "\r") source += "\\r";
-    else if (c === " ") source += "\\u2028";
-    else if (c === " ") source += "\\u2029";
-    else source += c;
+    source += c === "/" ? "\\/" : (LINE_TERMINATORS[c] ?? c);
   }
+  if (source === "") source = "(?:)";
   try {
     new RegExp(source, flags);
   } catch {
@@ -229,6 +247,7 @@ export function pcreToRegex(stored: string): string | undefined {
 /** Which helper declarations the rendered section uses. */
 interface Uses {
   text: boolean;
+  ownKeys: boolean;
 }
 
 /**
@@ -237,12 +256,12 @@ interface Uses {
  */
 function textRules(type: "text" | "email" | "password", methods: readonly InputMethod[]): string[] {
   const has = (name: string): boolean => methods.some((m) => m.name === name);
-  // The engine trims a text input unless told not to, a password always, an email only when told to.
-  const trim = type === "password" || (type === "text" ? !has("notrim") || has("trim") : has("trim"));
+  // The engine trims a text input unless told not to, and a password and an email always.
+  const trim = type !== "text" || !has("notrim") || has("trim");
 
   if (type === "email") {
     // The engine's email input accepts the empty string, and checks the format of anything else.
-    return [...(trim ? ["trim: true"] : []), "email: true"];
+    return ["trim: true", "email: true"];
   }
 
   let fold: string | undefined;
@@ -316,7 +335,13 @@ function textRules(type: "text" | "email" | "password", methods: readonly InputM
   if (checks.length === 0) return [];
   // A fold only matters to the checks that run after it.
   const folds = fold !== undefined && (ok !== "" || prevent.length > 0 || pattern !== undefined);
-  return [...(trim ? ["trim: true"] : []), ...(folds ? [`fold: ${fold}`] : []), ...checks];
+  return [
+    ...(trim ? ["trim: true"] : []),
+    // The engine returns a password of "" or "0" as it is, before any check.
+    ...(type === "password" ? ["password: true"] : []),
+    ...(folds ? [`fold: ${fold}`] : []),
+    ...checks,
+  ];
 }
 
 /**
@@ -341,11 +366,15 @@ const TEXT_HELPER = `/**
  * the engine checks it — trimmed of the six characters the engine trims (space,
  * tab, newline, carriage return, NUL, vertical tab), and case-folded (ASCII
  * only) before a whitelist, blocked phrase or pattern — while
- * the value itself is left exactly as it will be sent.
+ * the value itself is left exactly as it will be sent. A password of "" or "0"
+ * passes unchecked, as on the server. A pattern without the u flag is matched
+ * by the server byte by byte, so a value with a non-ASCII character is left to
+ * the server rather than matched character by character here.
  */
 const __zodText =
   (rules: {
     readonly trim?: boolean;
+    readonly password?: boolean;
     readonly fold?: "lower" | "upper";
     readonly email?: boolean;
     readonly min?: number;
@@ -361,6 +390,7 @@ const __zodText =
     const fail = (message: string): void => {
       ctx.issues.push({ code: "custom", message, input: ctx.value });
     };
+    if (rules.password === true && (ctx.value === "" || ctx.value === "0")) return;
     const lower = (s: string): string => s.replace(/[A-Z]+/g, (c) => c.toLowerCase());
     let v = rules.trim === true ? ctx.value.replace(/^[ \\t\\n\\r\\0\\x0B]+|[ \\t\\n\\r\\0\\x0B]+$/g, "") : ctx.value;
     if (rules.email === true) {
@@ -380,9 +410,31 @@ const __zodText =
       if ([...v].some((c) => !ok.includes(lower(c)))) fail("Invalid characters detected.");
     }
     if (rules.prevent?.some((phrase) => v.includes(phrase)) === true) fail("Invalid characters detected.");
-    if (rules.pattern !== undefined && !rules.pattern.test(v)) fail(rules.patternError ?? "Invalid pattern.");
+    if (rules.pattern !== undefined && (rules.pattern.unicode || !/[^\\x00-\\x7F]/.test(v)) && !rules.pattern.test(v)) {
+      fail(rules.patternError ?? "Invalid pattern.");
+    }
     for (const [re, n, what] of rules.atLeast ?? []) {
       if ((v.match(re)?.length ?? 0) < n) fail(\`Weak password detected. Please use at least \${n} \${what}.\`);
+    }
+  };
+`;
+
+/**
+ * The check an object with an optional key named after an `Object.prototype`
+ * member carries. Emitted once, and only when some object needs it.
+ */
+const OWN_KEYS_HELPER = `/**
+ * Drops each of \`keys\` whose parsed value is the \`Object.prototype\` member of
+ * that name. zod reads an absent key off the object, so for these names it finds
+ * the inherited member and copies it onto the parsed object as an own key; this
+ * takes it back off, so parse returns only the keys it was given.
+ */
+const __zodOwnKeys =
+  (keys: readonly string[]) =>
+  <T extends object>(ctx: z.core.ParsePayload<T>): void => {
+    const value = ctx.value as Record<string, unknown>;
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(value, key) && value[key] === (Object.prototype as Record<string, unknown>)[key]) delete value[key];
     }
   };
 `;
@@ -481,18 +533,24 @@ function objectSchema(inputs: readonly InputDescription[], indent: string, uses:
   };
   visit(inputs);
 
+  const inherited: string[] = [];
   const rows = [...keys].map(([name, { schemas, required }]) => {
     // An absent optional key named after an Object.prototype member reads as
-    // the inherited member, which the core type admits and so must this.
-    const all =
-      !required && OBJECT_MEMBERS.has(name)
-        ? [...schemas, `z.custom<Object[${JSON.stringify(name)}]>((v) => v === Object.prototype[${JSON.stringify(name)}])`]
-        : schemas;
+    // the inherited member, which the core type admits and so must this. The
+    // object's check then drops it from the parsed value.
+    const member = !required && OBJECT_MEMBERS.has(name);
+    if (member) inherited.push(name);
+    const all = member
+      ? [...schemas, `z.custom<Object[${JSON.stringify(name)}]>((v) => v === Object.prototype[${JSON.stringify(name)}])`]
+      : schemas;
     const schema = all.length === 1 ? all[0]! : `z.union([${all.join(", ")}])`;
     return `${inner}${propertyName(name)}: ${schema}${required ? "" : ".optional()"},`;
   });
   const factory = open ? "z.looseObject" : "z.object";
-  return rows.length === 0 ? `${factory}({})` : `${factory}({\n${rows.join("\n")}\n${indent}})`;
+  const object = rows.length === 0 ? `${factory}({})` : `${factory}({\n${rows.join("\n")}\n${indent}})`;
+  if (inherited.length === 0) return object;
+  uses.ownKeys = true;
+  return `${object}.check(__zodOwnKeys(${JSON.stringify(inherited)}))`;
 }
 
 /** One exported map, built inside a pure factory so an unused map costs a bundle nothing. */
@@ -519,7 +577,7 @@ function checks(map: string, core: string, sets: readonly RouteInputSet[]): stri
  * Pure: the same description renders the same text.
  */
 export function renderZodSection(inputs: RouteInputs): RoutesManifestSection {
-  const uses: Uses = { text: false };
+  const uses: Uses = { text: false, ownKeys: false };
   const maps = [
     schemaMap(
       "ROUTE_SCHEMAS",
@@ -547,7 +605,8 @@ export function renderZodSection(inputs: RouteInputs): RoutesManifestSection {
     ),
   ];
 
-  const source = `${uses.text ? `${TEXT_HELPER}\n` : ""}${maps.join("\n")}
+  const helpers = [...(uses.text ? [TEXT_HELPER] : []), ...(uses.ownKeys ? [OWN_KEYS_HELPER] : [])];
+  const source = `${helpers.map((h) => `${h}\n`).join("")}${maps.join("\n")}
 /**
  * The check that each schema above and the type for its key are the same type,
  * after removing the \`| undefined\` zod adds to an optional key (so it holds
