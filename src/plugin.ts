@@ -9,7 +9,23 @@
  *
  *     "xanosdk": { "kind": "toolchain", "plugin": "./dist/plugin.js" }
  */
-import type { ProjectContributions, ToolchainPlugin } from "@xano/sdk/plugin";
+import type {
+  InputDescription,
+  InputMethod,
+  ProjectContributions,
+  RouteInputSet,
+  RouteInputs,
+  RoutesManifestContext,
+  RoutesManifestSection,
+  ToolchainPlugin,
+} from "@xano/sdk/plugin";
+import { renderZodSection } from "./render.js";
+
+/**
+ * The SDK's input-description shapes, re-exported as types for the renderer:
+ * this is the one file that may name the peer.
+ */
+export type { InputDescription, InputMethod, RouteInputSet, RouteInputs, RoutesManifestSection };
 
 const PACKAGE_NAME = "@xano-sdk/zod";
 
@@ -87,13 +103,30 @@ function contributes(): ProjectContributions {
   return { config: { enabled: true } };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// routes.gen.ts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * This module's section of `routes.gen.ts`: a zod schema for every route,
+ * channel and message input, and the check binding each to its core type. Pure
+ * and synchronous, as the hook requires; the config block carries nothing the
+ * section depends on.
+ */
+function routesManifest(ctx: RoutesManifestContext): RoutesManifestSection {
+  assertSdkVersion(ctx.sdkVersion);
+  return renderZodSection(ctx.inputs);
+}
+
 /**
  * The default export the SDK's loader reads. `kind` is repeated from the
- * manifest so the two must agree.
+ * manifest so the two must agree. No questions: installing the module is the
+ * only choice there is.
  */
 const plugin: ToolchainPlugin = {
   kind: "toolchain",
   contributes,
+  routesManifest,
 };
 
 export default plugin;

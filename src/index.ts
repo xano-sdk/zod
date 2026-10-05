@@ -3,3 +3,4 @@
  * without going through the SDK's toolchain loader.
  */
 export { PEER_RANGE } from "./plugin.js";
+export { renderZodSection } from "./render.js";
