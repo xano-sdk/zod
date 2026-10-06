@@ -26,11 +26,18 @@ Everything committed here is public.
 npm run build       # tsup → dist/index.js, dist/plugin.js (+ .d.ts)
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint .
-npm test            # vitest run
+npm test            # vitest run — no backend needed
+npm run test:e2e    # the parity suite: deploys test/e2e/fixtures to a Xano Engine on this machine
+                    # through the installed SDK's CLI, then compares every schema with the server
 npm pack --dry-run  # the tarball: dist/, README.md, llms.txt, LICENSE, package.json
 ```
 
-Before committing: `npm run typecheck && npm run lint && npm test`.
+Before committing: `npm run typecheck && npm run lint && npm test`. Before
+changing what a schema checks: `npm run test:e2e` too (below). It needs a
+machine that can run a Xano Engine, or `XANO_E2E_HOST` naming a backend that
+already serves `test/e2e/fixtures/defs.ts` (deploy that file as a project's
+`xano/index.ts`; `node_modules/.cache/e2e-project/` holds one after a local
+run). When neither is reachable, say so and stop; never report the step as done.
 
 To test against unreleased SDK work, install a tarball built in `sdk-dev`
 without touching the pin:
@@ -61,6 +68,19 @@ A later plain `npm install` or `npm ci` puts the pinned SDK back.
 - `test/helpers/sdk-pipeline.ts`: reaches the installed SDK's planner and
   composer (below). `test/helpers/emitted.ts`: writes the emitted file under
   `node_modules/.cache/` so `import "zod"` resolves.
+- `test/e2e/`: the parity suite, `npm run test:e2e`. `fixtures/defs.ts` is a
+  workspace with one endpoint per input declaration (every type, flag and
+  method, plus a dbLink); `helpers/backend.ts` deploys it to a Xano Engine on
+  this machine through the installed SDK's own CLI (or uses `XANO_E2E_HOST`, a
+  backend already serving it, such as a cloud ephemeral deployed from the
+  throwaway project under `node_modules/.cache/e2e-project/`); `parity.e2e.ts`
+  sends each case to the schema and the server and compares the verdicts, and
+  the messages where the schema's are this module's own. Cases the two are
+  known to disagree on carry the reason, and the suite asserts that exact
+  disagreement, so a server change surfaces. `XANO_E2E_KEEP=1` leaves the
+  engine running between runs; by default it is stopped, since nothing else
+  reclaims one. Not part of `npm test`: it needs the CLI and a machine that can
+  run an engine.
 - `test/plugin.test.ts`: the plugin's shape, its config block, and the peer
   backstop.
 - `test/peer-free.test.ts`: the peer is types-only, and `PEER_RANGE` matches
@@ -104,15 +124,36 @@ Each one fails in a USER's project, not here, unless a test catches it.
   `.transform()` or coercion in an emitted schema. `__zodOwnKeys` is not an
   exception: it removes a key zod itself copied off `Object.prototype`, so the
   parsed value has exactly the keys it was given.
-- **Don't guess a check.** A pattern is translated only when the two regex
-  dialects agree on every construct in it, and it is compiled here before it is
-  emitted. Anything else is left to the server. A guessed check that rejects a
-  value the server accepts is worse than none. The same goes for a vector's
-  size, and for a pattern without the `u` flag against a non-ASCII value (the
-  server matches bytes there), which the helper leaves to the server. The
-  module's contract is to accept everything the server accepts, so the server's
-  shortcuts are mirrored: a password of `""` or `"0"` passes before any check,
-  and an email is always trimmed.
+- **Don't guess a check; measure it.** A pattern is translated only when the
+  two regex dialects agree on every construct in it, and it is compiled here
+  before it is emitted. Anything else is left to the server, as is a pattern
+  without the `u` flag against a non-ASCII value: the parity suite found one
+  backend matching bytes there and another characters, so only the server can
+  say; the same for a `u` pattern that uses `\s`, `\d`, `\w` or `\b`, which
+  one backend reads as Unicode classes and another as ASCII. A guessed check that rejects a value the server accepts is worse than
+  none; where backends differ, the schema takes the lenient reading (`$`
+  without `D` may match before a final newline on some backends, so the
+  translation lets it). The module's contract is to accept everything the
+  server accepts and refuse what it refuses, so the server's own rules are
+  mirrored exactly as observed: a text input is trimmed before measuring only when its methods say
+  `trim` (the last of `trim`/`notrim` wins), a password and an email always; a
+  required text, email, password, uuid, date or json input, or a required
+  tableRef to a uuid-keyed table, reads `""` as missing before any other check,
+  with the server's `Missing param: <name>`;
+  a password of `""` or `"0"` then passes unchecked; `startsWith` is checked
+  before the case fold and the fold before the whitelist, `prevent` and
+  `pattern`, whatever the declared order; a vector must have its declared size.
+  The parity suite (`npm run test:e2e`) is the oracle for all of this: before
+  changing a rule, add the declaration and payloads there and watch the server.
+- **A gap the parity suite pins is documented, and closed in three places.**
+  The suite marks the cases where schema and server are known to disagree, with
+  the reason: values the server coerces (the schema holds the core type), an
+  omitted optional input whose default fails its methods (the description
+  carries no default), a pattern stored without its error text (the server
+  refuses every value), the members of a stored file reference and a file
+  upload sent as JSON, a date's format, an enum with no values. Each is in
+  README's "What a schema does not do" and in `llms.txt`. Closing one means
+  changing `render.ts`, the suite's expectation and both docs in one commit.
 - **The hook is pure and synchronous.** `routesManifest` touches no filesystem
   and returns the same text for the same input; every writer of `routes.gen.ts`
   must produce identical bytes or `xano:check` flips between them. No clock, no
@@ -175,7 +216,7 @@ Patch only: `1.0.x`, whatever the change. No bump unless the owner asks.
 
 1. README.md and llms.txt carry the current peer ranges and tested versions,
    matching the `devDependencies` pins.
-2. `npm run typecheck && npm run lint && npm test && npm run build`.
+2. `npm run typecheck && npm run lint && npm test && npm run test:e2e && npm run build`.
 3. From `sdk-dev`, run the SDK's source-leak check over `README.md`, `llms.txt`,
    `AGENTS.md`, `SECURITY.md`, `package.json`, `src/` and `test/`. Zero hits.
 4. `npm pack --dry-run` shows `dist/` (the two entries, their shared chunk and

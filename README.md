@@ -66,12 +66,13 @@ input: {
 },
 ```
 
-the module writes (helpers trimmed):
+the module writes (`__zodRequired` and `__zodText` are helpers the block declares
+once, before the maps; trimmed here):
 
 ```ts
 export const ROUTE_SCHEMAS = /* @__PURE__ */ (() => ({
   "POST listings": z.object({
-    title: z.string().check(__zodText({ trim: true, max: 80 })),
+    title: z.string().check(__zodRequired("title"), __zodText({ max: 80 })),
     price: z.int().min(0),
     tags: z.array(z.string()).max(5).optional(),
   }),
@@ -144,17 +145,17 @@ reject a value the server would accept.
 | Input | Schema |
 | --- | --- |
 | `text` | `z.string()`, plus the checks below |
-| `email` | `z.string()` with the server's email format; the empty string passes, as it does on the server |
+| `email` | `z.string()` with the server's email format; on an optional input the empty string passes, as it does on the server |
 | `password` | `z.string()`, plus length and the strength counts below |
 | `int` | `z.int()` with `min` / `max` as value bounds |
 | `decimal` | `z.number()` with `min` / `max` as value bounds |
 | `bool` | `z.boolean()` |
 | `timestamp` | `z.number()` (epoch milliseconds) |
 | `date` | `z.string()` |
-| `uuid` | any 8-4-4-4-12 hex string, or `""` |
+| `uuid` | any 8-4-4-4-12 hex string, or `""` on an optional input |
 | `enum` | `z.enum([...])`, or `z.literal([...])` for numeric values |
 | `json` | `z.unknown()` |
-| `vector` | `z.array(z.number())` |
+| `vector` | `z.array(z.number())` of exactly the declared size |
 | `object` | a nested `z.object` of its fields |
 | `tableRef` | the linked table's id: `z.int()`, or a uuid for a uuid table |
 | `dbLink` | the linked table's columns, spread into the surrounding object (as the server expands them); an open object when the columns are unknown |
@@ -167,6 +168,13 @@ Across all of them: a list input becomes `z.array(...)` with its list `min` /
 input that is not required adds `.optional()`. A required input with a default
 stays required. There is no `.default()`, because the core type requires the key.
 
+A required `text`, `email`, `password`, `uuid`, `date` or `json` input, or a
+required `tableRef` to a uuid-keyed table, refuses the empty string with the
+server's `Missing param: <name>`, before any other check, because the server
+reads `""` on a required input as missing. A blank
+such as `"  "` is a value. Every other type refuses `""` as the wrong type
+already, and the elements of a required list are not themselves required.
+
 ### Text checks
 
 `min`, `max`, `startsWith`, `pattern`, the character whitelist (`alphaOk`,
@@ -176,28 +184,78 @@ messages the server returns. As on the server, a password of `""` or `"0"`
 passes without any check.
 
 They run on the value **as the server measures it**. The server trims a text
-input (unless `notrim`), a password and an email before checking, and case-folds a text
-input with `lower` / `upper` before the whitelist, `prevent` and `pattern`. The
-schema runs its checks on a trimmed, folded copy and leaves the value itself
-alone, so `"  @abc  "` passes a `max:6` and is sent with its spaces.
+input only when its methods include `trim` (a later `notrim` turns that off
+again: the last one wins), always trims a password and an email, and case-folds
+a text input with `lower` / `upper` before the whitelist, `prevent` and
+`pattern`, whatever order the methods are declared in. The schema runs its
+checks on the same trimmed, folded copy and leaves the value itself alone, so
+`"  @abc  "` passes a `max:6` on an input that declares `trim` and is sent with
+its spaces, while on an input that does not, the spaces count.
 
 ### What a schema does not do
 
+The server behavior behind these is pinned by the repository's end-to-end
+suite, which deploys every input type and method to a Xano Engine and compares
+each schema's verdict with the server's.
+
+- **An omitted optional input is not checked.** The server binds an omitted
+  input to its default (`""` for a text, `0` for a number, `[]` for a list,
+  `{}` for an object) and runs the input's methods on that, so an optional text
+  with `min:3`, a `startsWith` or a pattern the empty string fails, an optional
+  list with a list `min`, and an optional object with a required member are
+  refused when left out, unless the input declares a default that passes. The
+  description this module reads carries no default, so the schema accepts the
+  omission. Declare such an input required, or give it a default that passes.
+- **Values the server coerces are refused.** The server reads `"100"` as `100`
+  on an int and truncates `12.5` to `12`, reads `"yes"`, `1` and `"false"` as a
+  bool, an ISO string on a timestamp, a number on a date, `"1"` on a numeric
+  enum, a bare value as a one-item list, a string as an object, and `null` or
+  `""` on an optional input as that input's default. The schema holds the core
+  type, which is what the SDK's own types say a client sends.
 - **Transforms are not applied.** `trim`, `lower`, `upper` and a password's
   `salt` change the value, and the server applies them to what it receives. A
   client-side copy would change the payload, so the schema only uses them to
   decide how to check.
 - **A pattern JavaScript reads differently is not checked.** Patterns are stored
   in the server's regex dialect (PCRE). One that uses only the syntax the two
-  dialects share is translated and checked. One that uses `\A`, `\z`, `\h`,
-  `\p{...}`, POSIX classes, inline flags, atomic groups, or a flag JavaScript has
-  no equivalent for is skipped, and the server still checks it.
-- **A vector's size is not enforced.** Any array of numbers passes.
+  dialects share is translated and checked; the three constructs they define
+  differently are written as what the server matches (`.` stops at a newline
+  only, `\s` is the six ASCII whitespace characters, `$` without `D` also
+  matches before a final newline, `^` and `$` under `m` turn at a newline
+  only). One that uses `\A`, `\z`, `\h`, `\p{...}`, `\S` inside a
+  class, POSIX classes, inline flags, atomic groups, or a flag JavaScript has no
+  equivalent for is skipped, and the server still checks it.
 - **An input named `__proto__` is not checked.** Recent zod 4 releases skip that
   key on purpose, so the server alone validates it.
 - **A pattern without the `u` flag is not checked against a non-ASCII value.**
-  Without `u` the server matches the value byte by byte, which JavaScript cannot
-  reproduce, so such a value is left to the server. ASCII values are checked.
+  Without `u` the server's regex engine matches the value byte by byte on some
+  backends (`é` then counts as two to `/^.{2}$/`) and character by character on
+  others, so such a value is left to the server. ASCII values are checked, and
+  with `u` every value is, since every backend, and JavaScript, then counts
+  characters, except under a pattern that uses `\s`, `\d`, `\w` or `\b`: with
+  `u` some backends read those as Unicode classes and others as ASCII, so such
+  a pattern leaves a non-ASCII value to the server too.
+- **`$` may match before a final newline, and `^` under `m` after one.** Without
+  the `D` flag that is how the server's regex engine reads `$` on some backends,
+  so the schema lets `"abc\n"` pass `^abc$`; a backend that reads `$` as the
+  very end still refuses it. Likewise some backends let `^` under `m` match
+  after a newline that ends the value and others do not; the schema lets it.
+- **A date's format is checked only by the server.** The server parses a date
+  permissively (`"yesterday"`, `"2024-13-45"` and `"   "` all bind) and refuses
+  what it cannot read. The schema takes any string.
+- **A stored file reference and a file upload are typed, not checked.** The
+  server requires every member of a file reference sent as JSON (`path`,
+  `name`, `type`, `mime`, `size`, `access`, `meta`, `url`) where the type lists
+  them optional, and refuses an upload sent as JSON. The schema admits what the
+  type admits.
+- **An enum with no values** accepts anything on the server. Its type is
+  `never`, so nothing passes the schema.
+- **A pattern stored without its error text is refused by the server for every
+  value**, with `Invalid arguments for filter method - pattern`. That is what
+  the `"pattern:..."` string form and `{ name: "pattern", arg: [pattern] }`
+  store; write `{ name: "pattern", arg: [pattern, message] }` (an empty message
+  gives the server's default, `Invalid pattern.`). The schema checks the
+  pattern as written.
 - **Disabled methods and methods the module does not know produce no check.**
 
 ## When the module fails

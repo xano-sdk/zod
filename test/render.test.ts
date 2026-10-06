@@ -32,7 +32,7 @@ describe("renderZodSection: one expression per described type", () => {
     ["uuid", { type: "uuid" }, 'z.guid().or(z.literal(""))'],
     ["email", { type: "email" }, "z.string().check(__zodText({ trim: true, email: true }))"],
     ["password", { type: "password" }, "z.string()"],
-    ["vector", { type: "vector", size: 3 }, "z.array(z.number())"],
+    ["vector", { type: "vector", size: 3 }, "z.array(z.number()).length(3)"],
     ["tableRef int", { type: "tableRef", keyType: "int", table: "t" }, "z.int()"],
     ["tableRef uuid", { type: "tableRef", keyType: "uuid", table: "t" }, 'z.guid().or(z.literal(""))'],
     ["string enum", { type: "enum", values: ["a", "b"] }, 'z.enum(["a","b"])'],
@@ -42,7 +42,7 @@ describe("renderZodSection: one expression per described type", () => {
     ["geo_point", { type: "geo_point" }, 'z.object({ type: z.literal("point"), data: z.object({ lng: z.number(), lat: z.number() }) })'],
     ["geo_multipolygon", { type: "geo_multipolygon" }, 'z.object({ type: z.literal("polys"), data: z.array(z.array(z.object({ lng: z.number(), lat: z.number() }))) })'],
   ])("%s", (_label, rest, expected) => {
-    expect(row([inp("v", rest, { required: true })], "v")).toBe(`v: ${expected},`);
+    expect(row([inp("v", rest)], "v")).toBe(`v: ${expected}.optional(),`);
   });
 
   it("writes a file reference as an object of its optional members, and an upload as an opaque value", () => {
@@ -70,7 +70,7 @@ describe("renderZodSection: one expression per described type", () => {
   });
 
   it("leaves json's nullable off a scalar, where unknown already admits null, but keeps it on a list", () => {
-    expect(row([inp("v", { type: "json" }, { required: true, nullable: true })], "v")).toBe("v: z.unknown(),");
+    expect(row([inp("v", { type: "json" }, { nullable: true })], "v")).toBe("v: z.unknown().optional(),");
     expect(row([inp("v", { type: "json" }, { required: true, nullable: true, list: {} })], "v")).toBe("v: z.array(z.unknown()).nullable(),");
   });
 
@@ -81,7 +81,7 @@ describe("renderZodSection: one expression per described type", () => {
       messages: [],
     }).source;
     expect(source).toContain(`    addr: z.object({
-      street: z.string(),
+      street: z.string().check(__zodRequired("street")),
       unit: z.string().optional(),
     }),`);
   });
@@ -90,22 +90,31 @@ describe("renderZodSection: one expression per described type", () => {
     expect(row([inp("toString", { type: "text" })], "toString")).toBe(
       'toString: z.union([z.string(), z.custom<Object["toString"]>((v) => v === Object.prototype["toString"])]).optional(),',
     );
-    expect(row([inp("valueOf", { type: "text" }, { required: true })], "valueOf")).toBe("valueOf: z.string(),");
+    expect(row([inp("valueOf", { type: "text" }, { required: true })], "valueOf")).toBe('valueOf: z.string().check(__zodRequired("valueOf")),');
   });
 
   it("quotes a key that is not an identifier", () => {
-    expect(row([inp("first-name", { type: "text" }, { required: true })], '"first-name"')).toBe('"first-name": z.string(),');
+    expect(row([inp("first-name", { type: "text" }, { required: true })], '"first-name"')).toBe('"first-name": z.string().check(__zodRequired("first-name")),');
   });
 });
 
 describe("renderZodSection: methods", () => {
-  it("text min/max become length bounds, measured on the trimmed value the engine measures", () => {
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("min", "3"), m("max", "8")] })], "v")).toBe(
-      "v: z.string().check(__zodText({ trim: true, min: 3, max: 8 })),",
+  it("text min/max become length bounds, measured on the raw value unless the input says trim", () => {
+    expect(row([inp("v", { type: "text" }, { methods: [m("min", "3"), m("max", "8")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ min: 3, max: 8 })).optional(),",
     );
-    // notrim turns the engine's default trim off, so the bounds measure the raw value.
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("notrim"), m("max", "8")] })], "v")).toBe(
-      "v: z.string().check(__zodText({ max: 8 })),",
+    // The engine trims before measuring only when told to.
+    expect(row([inp("v", { type: "text" }, { methods: [m("trim"), m("min", "3"), m("max", "8")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ trim: true, min: 3, max: 8 })).optional(),",
+    );
+  });
+
+  it("the last of trim and notrim wins, wherever they sit among the other methods", () => {
+    expect(row([inp("v", { type: "text" }, { methods: [m("trim"), m("notrim"), m("max", "8")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ max: 8 })).optional(),",
+    );
+    expect(row([inp("v", { type: "text" }, { methods: [m("notrim"), m("max", "8"), m("trim")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ trim: true, max: 8 })).optional(),",
     );
   });
 
@@ -118,53 +127,67 @@ describe("renderZodSection: methods", () => {
 
   it("maps pattern, startsWith and the character whitelist", () => {
     expect(
-      row([inp("v", { type: "text" }, { required: true, methods: [m("startsWith", "@"), m("pattern", "^[a-z]+$", "lowercase only"), m("alphaOk"), m("ok", "_")] })], "v"),
-    ).toBe('v: z.string().check(__zodText({ trim: true, startsWith: "@", ok: "abcdefghijklmnopqrstuvwxyz_", pattern: /^[a-z]+$/, patternError: "lowercase only" })),');
+      row([inp("v", { type: "text" }, { methods: [m("startsWith", "@"), m("pattern", "^[a-z]+$", "lowercase only"), m("alphaOk"), m("ok", "_")] })], "v"),
+    ).toBe('v: z.string().check(__zodText({ startsWith: "@", ok: "abcdefghijklmnopqrstuvwxyz_", pattern: /^[a-z]+(?=\\n?$)/, patternError: "lowercase only" })).optional(),');
   });
 
   it("folds case only for the checks that run after the engine's lower/upper", () => {
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("upper"), m("pattern", "/^[A-Z]+$/")] })], "v")).toBe(
-      'v: z.string().check(__zodText({ trim: true, fold: "upper", pattern: /^[A-Z]+$/ })),',
+    expect(row([inp("v", { type: "text" }, { methods: [m("upper"), m("pattern", "/^[A-Z]+$/")] })], "v")).toBe(
+      'v: z.string().check(__zodText({ fold: "upper", pattern: /^[A-Z]+(?=\\n?$)/ })).optional(),',
     );
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("lower"), m("max", "3")] })], "v")).toBe(
-      "v: z.string().check(__zodText({ trim: true, max: 3 })),",
+    expect(row([inp("v", { type: "text" }, { methods: [m("lower"), m("max", "3")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ max: 3 })).optional(),",
+    );
+  });
+
+  it("marks a u pattern that uses a class escape, which backends read differently for non-ASCII values", () => {
+    expect(row([inp("v", { type: "text" }, { methods: [m("pattern", "/^\\w+$/u")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ pattern: /^\\w+(?=\\n?$)/u, patternAscii: true })).optional(),",
+    );
+    // Without u, or without such an escape, there is nothing to mark.
+    expect(row([inp("v", { type: "text" }, { methods: [m("pattern", "/^\\w+$/")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ pattern: /^\\w+(?=\\n?$)/ })).optional(),",
+    );
+    expect(row([inp("v", { type: "text" }, { methods: [m("pattern", "/^.{2}$/u")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ pattern: /^[^\\n]{2}(?=\\n?$)/u })).optional(),",
     );
   });
 
   it("maps the password policy as one count each, on the value the engine always trims", () => {
-    expect(row([inp("v", { type: "password" }, { required: true, methods: [m("min", "8"), m("minDigit", "1"), m("minSymbol", "2")] })], "v")).toBe(
-      'v: z.string().check(__zodText({ trim: true, password: true, min: 8, atLeast: [[/[0-9]/g, 1, "numbers"], [/[!-\\/:-@[-`{-~]/g, 2, "punctuation symbols"]] })),',
+    expect(row([inp("v", { type: "password" }, { methods: [m("min", "8"), m("minDigit", "1"), m("minSymbol", "2")] })], "v")).toBe(
+      'v: z.string().check(__zodText({ trim: true, password: true, min: 8, atLeast: [[/[0-9]/g, 1, "numbers"], [/[!-\\/:-@[-`{-~]/g, 2, "punctuation symbols, like: $@^&*%^"]] })).optional(),',
     );
   });
 
   it("an email is always trimmed: the server trims it whatever its methods", () => {
-    expect(row([inp("v", { type: "email" }, { required: true, methods: [m("notrim")] })], "v")).toBe(
-      "v: z.string().check(__zodText({ trim: true, email: true })),",
+    expect(row([inp("v", { type: "email" }, { methods: [m("notrim")] })], "v")).toBe(
+      "v: z.string().check(__zodText({ trim: true, email: true })).optional(),",
     );
   });
 
   it("maps each blocked phrase, skipping an empty one, on the folded value", () => {
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("lower"), m("prevent", "admin"), m("prevent", ""), m("prevent", "root")] })], "v")).toBe(
-      'v: z.string().check(__zodText({ trim: true, fold: "lower", prevent: ["admin","root"] })),',
+    expect(row([inp("v", { type: "text" }, { methods: [m("lower"), m("prevent", "admin"), m("prevent", ""), m("prevent", "root")] })], "v")).toBe(
+      'v: z.string().check(__zodText({ fold: "lower", prevent: ["admin","root"] })).optional(),',
     );
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("prevent", "")] })], "v")).toBe("v: z.string(),");
+    expect(row([inp("v", { type: "text" }, { methods: [m("prevent", "")] })], "v")).toBe("v: z.string().optional(),");
   });
 
   it.each([
     ["trim", [m("trim")]],
+    ["notrim", [m("notrim")]],
     ["lower", [m("lower")]],
     ["upper", [m("upper")]],
-    ["all three", [m("lower"), m("upper"), m("trim")]],
+    ["all of them", [m("lower"), m("upper"), m("trim")]],
   ])("text %s alone produces no check — a transform is the server's to apply", (_label, methods) => {
-    expect(row([inp("v", { type: "text" }, { required: true, methods })], "v")).toBe("v: z.string(),");
+    expect(row([inp("v", { type: "text" }, { methods })], "v")).toBe("v: z.string().optional(),");
   });
 
   it("password salt alone produces no check", () => {
-    expect(row([inp("v", { type: "password" }, { required: true, methods: [m("salt", "abc")] })], "v")).toBe("v: z.string(),");
+    expect(row([inp("v", { type: "password" }, { methods: [m("salt", "abc")] })], "v")).toBe("v: z.string().optional(),");
   });
 
   it("a pattern zod cannot match faithfully is left to the server, not guessed", () => {
-    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("pattern", "/\\Aabc\\z/")] })], "v")).toBe("v: z.string(),");
+    expect(row([inp("v", { type: "text" }, { methods: [m("pattern", "/\\Aabc\\z/")] })], "v")).toBe("v: z.string().optional(),");
   });
 
   it("a required input with a default stays required: no .default(), no .optional()", () => {
@@ -180,6 +203,52 @@ describe("renderZodSection: methods", () => {
   });
 });
 
+describe("renderZodSection: the server's required check", () => {
+  it.each([
+    ["text", { type: "text" }, 'z.string().check(__zodRequired("v"))'],
+    ["email", { type: "email" }, 'z.string().check(__zodRequired("v"), __zodText({ trim: true, email: true }))'],
+    ["password", { type: "password" }, 'z.string().check(__zodRequired("v"))'],
+    ["uuid", { type: "uuid" }, 'z.guid().or(z.literal("")).check(__zodRequired("v"))'],
+    ["date", { type: "date" }, 'z.string().check(__zodRequired("v"))'],
+    ["json", { type: "json" }, 'z.unknown().check(__zodRequired("v"))'],
+    ["tableRef to a uuid table", { type: "tableRef", keyType: "uuid", table: "t" }, 'z.guid().or(z.literal("")).check(__zodRequired("v"))'],
+  ])("a required %s refuses the empty string as missing", (_label, rest, expected) => {
+    expect(row([inp("v", rest, { required: true })], "v")).toBe(`v: ${expected},`);
+  });
+
+  it("runs before the text checks, so a required text with a minimum reports the server's missing param for the empty string", () => {
+    expect(row([inp("v", { type: "text" }, { required: true, methods: [m("min", "3")] })], "v")).toBe(
+      'v: z.string().check(__zodRequired("v"), __zodText({ min: 3 })),',
+    );
+  });
+
+  it.each([
+    ["int", { type: "int" }, "z.int()"],
+    ["decimal", { type: "decimal" }, "z.number()"],
+    ["bool", { type: "bool" }, "z.boolean()"],
+    ["epochms", { type: "epochms" }, "z.number()"],
+    ["enum", { type: "enum", values: ["a"] }, 'z.enum(["a"])'],
+    ["tableRef to an int table", { type: "tableRef", keyType: "int", table: "t" }, "z.int()"],
+    ["unknown", { type: "unknown", storedType: "weird" }, "z.unknown()"],
+  ])("a required %s carries no such check: its type refuses the empty string already, or is not known", (_label, rest, expected) => {
+    expect(row([inp("v", rest, { required: true })], "v")).toBe(`v: ${expected},`);
+  });
+
+  it("checks a single value, never the elements of a required list, and sits before nullable", () => {
+    expect(row([inp("v", { type: "text" }, { required: true, list: {} })], "v")).toBe("v: z.array(z.string()),");
+    expect(row([inp("v", { type: "text" }, { required: true, nullable: true })], "v")).toBe('v: z.string().check(__zodRequired("v")).nullable(),');
+    // json drops nullable (unknown admits null) but keeps the check.
+    expect(row([inp("v", { type: "json" }, { required: true, nullable: true })], "v")).toBe('v: z.unknown().check(__zodRequired("v")),');
+  });
+
+  it("declares the helper only when some input uses it", () => {
+    const without = renderZodSection({ routes: [{ key: "GET x", inputs: [inp("a", { type: "text" })] }], channels: [], messages: [] }).source;
+    expect(without).not.toContain("__zodRequired");
+    const using = renderZodSection({ routes: [{ key: "GET x", inputs: [inp("a", { type: "text" }, { required: true })] }], channels: [], messages: [] }).source;
+    expect(using).toContain("const __zodRequired =");
+  });
+});
+
 describe("renderZodSection: dbLink", () => {
   const columns = [inp("name", { type: "text" }, { required: true }), inp("age", { type: "int" })];
 
@@ -190,7 +259,7 @@ describe("renderZodSection: dbLink", () => {
       messages: [],
     }).source;
     expect(source).toContain(`  "POST signup": z.object({
-    name: z.string(),
+    name: z.string().check(__zodRequired("name")),
     age: z.int().optional(),
     plan: z.enum(["free"]),
   }),`);
@@ -203,7 +272,7 @@ describe("renderZodSection: dbLink", () => {
       channels: [],
       messages: [],
     }).source;
-    expect(source).toContain("name: z.union([z.string(), z.int()]).optional(),");
+    expect(source).toContain('name: z.union([z.string().check(__zodRequired("name")), z.int()]).optional(),');
   });
 
   it("leaves the object open when the linked table's columns are unknown", () => {
@@ -289,14 +358,57 @@ function compile(literal: string): RegExp {
 
 describe("pcreToRegex", () => {
   it.each([
-    ["^[a-z0-9-]+$", "/^[a-z0-9-]+$/"],
-    ["/^[A-Z]+$/i", "/^[A-Z]+$/i"],
-    ["#^a/b$#", "/^a\\/b$/"],
+    ["^[a-z0-9-]+$", "/^[a-z0-9-]+(?=\\n?$)/"],
+    ["/^[A-Z]+$/i", "/^[A-Z]+(?=\\n?$)/i"],
+    ["#^a/b$#", "/^a\\/b(?=\\n?$)/"],
     ["~^\\d{3}-\\d{4}$~D", "/^\\d{3}-\\d{4}$/"],
-    ["/^(?<year>\\d{4})-(\\d\\d)\\1$/", "/^(?<year>\\d{4})-(\\d\\d)\\1$/"],
-    ["/^\\x41\\.$/", "/^\\x41\\.$/"],
+    ["/^(?<year>\\d{4})-(\\d\\d)\\1$/", "/^(?<year>\\d{4})-(\\d\\d)\\1(?=\\n?$)/"],
+    ["/^\\x41\\.$/", "/^\\x41\\.(?=\\n?$)/"],
+    ["/^a\\$$/D", "/^a\\$$/"],
   ])("translates %j", (stored, expected) => {
     expect(pcreToRegex(stored)).toBe(expected);
+  });
+
+  it.each([
+    ["/^a.b$/D", "/^a[^\\n]b$/", "dot stops at a newline only"],
+    ["/^a.b$/sD", "/^a.b$/s", "dot under s matches everything, as in JavaScript"],
+    ["/^\\s*x\\S$/D", "/^[\\t\\n\\v\\f\\r ]*x[^\\t\\n\\v\\f\\r ]$/", "\\s is six ASCII characters"],
+    ["/[\\s,]+/", "/[\\t\\n\\v\\f\\r ,]+/", "\\s inside a class"],
+    ["/^a$/", "/^a(?=\\n?$)/", "$ without D also matches before a final newline"],
+    ["/^b$/m", "/(?<![^\\n])b(?![^\\n])/", "^ and $ under m turn at a newline only"],
+    ["/a$/mi", "/a(?![^\\n])/i", "m is written out, the other flags kept"],
+  ])("writes %j as %j, what the server matches (%s)", (stored, expected) => {
+    expect(pcreToRegex(stored)).toBe(expected);
+  });
+
+  it("matches what the server matches for a dot, a whitespace escape, a dollar and a multiline anchor", () => {
+    const dot = compile(pcreToRegex("/^a.b$/")!);
+    expect(dot.test("a\rb")).toBe(true);
+    expect(dot.test("a\u2028b")).toBe(true);
+    expect(dot.test("a\nb")).toBe(false);
+    const nonSpace = compile(pcreToRegex("/^\\S+$/")!);
+    expect(nonSpace.test("a\u00a0b")).toBe(true);
+    expect(nonSpace.test("a b")).toBe(false);
+    expect(compile(pcreToRegex("/^\\s$/")!).test("\u00a0")).toBe(false);
+    const dollar = compile(pcreToRegex("/^a$/")!);
+    expect(dollar.test("a\n")).toBe(true);
+    expect(dollar.test("a\n\n")).toBe(false);
+    expect(dollar.test("a\r")).toBe(false);
+    expect(compile(pcreToRegex("/^a$/D")!).test("a\n")).toBe(false);
+    const multi = compile(pcreToRegex("/^b$/m")!);
+    expect(multi.test("a\nb")).toBe(true);
+    expect(multi.test("b\nc")).toBe(true);
+    expect(multi.test("a\rb")).toBe(false);
+    expect(multi.test("b\r\n")).toBe(false);
+    // The server's ^ under m matches after a final newline too, so an empty match there passes.
+    const empty = compile(pcreToRegex("/^x?$/m")!);
+    expect(empty.test("ab\n")).toBe(true);
+    expect(empty.test("a\n\n")).toBe(true);
+    expect(empty.test("")).toBe(true);
+  });
+
+  it("refuses \\S inside a class, which has no class form", () => {
+    expect(pcreToRegex("/[\\Sx]+/")).toBeUndefined();
   });
 
   it.each([

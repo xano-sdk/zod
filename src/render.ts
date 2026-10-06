@@ -23,12 +23,17 @@
  *
  * What the engine checks, as the engine checks it; a check that cannot be
  * reproduced faithfully (a pattern in syntax JavaScript reads differently) is
- * left to the server rather than guessed at. Validating methods become checks; transforming methods (`trim`, `lower`, `upper`, `salt`) are
- * never applied to the value, because the server applies them to what it
- * receives and a client-side copy would change the payload. They still shape
- * the CHECKS: the engine trims a text input before measuring it and case-folds
- * it before matching a pattern, so the checks run on a normalized copy of the
- * value, never on the value itself.
+ * left to the server rather than guessed at. Validating methods become checks;
+ * transforming methods (`trim`, `lower`, `upper`, `salt`) are never applied to
+ * the value, because the server applies them to what it receives and a
+ * client-side copy would change the payload. They still shape the CHECKS: the
+ * engine trims a text input before measuring it when, and only when, its
+ * methods say `trim` (an email and a password always), and case-folds it before
+ * matching a pattern, so the checks run on a normalized copy of the value,
+ * never on the value itself. Two checks come from no method: a required
+ * text, email, password, uuid, date or json input refuses the empty string as
+ * missing, as the server does before it runs anything else, and a vector must
+ * have exactly its declared size.
  *
  * ── Bundle cost ─────────────────────────────────────────────────────────────
  *
@@ -126,11 +131,22 @@ function numericArg(method: InputMethod): number | undefined {
 const BRACKETS: Readonly<Record<string, string>> = { "(": ")", "[": "]", "{": "}", "<": ">" };
 
 /**
- * PCRE flags with a JavaScript equivalent. `D` (dollar matches only at the very
- * end) and `S` (study) need none: the first is how `$` already behaves, the
- * second changes no match.
+ * PCRE flags with a JavaScript equivalent. `S` (study) changes no match. `D`
+ * (dollar matches only at the very end) is how JavaScript's `$` already
+ * behaves; it is PCRE's `$` WITHOUT `D`, which also matches before a final
+ * newline, that is written out (below). `m` is not passed on either:
+ * JavaScript's `m` reads a carriage return and the Unicode line separators as
+ * line boundaries where the server reads only a newline, so `^` and `$` are
+ * written out under it too.
  */
-const FLAGS: Readonly<Record<string, string>> = { i: "i", m: "m", s: "s", u: "u", D: "", S: "" };
+const FLAGS: Readonly<Record<string, string>> = { i: "i", m: "", s: "s", u: "u", D: "", S: "" };
+
+/**
+ * The six characters PCRE's `\s` matches, as a class body. JavaScript's `\s`
+ * also matches every Unicode space (a no-break space, a line separator), which
+ * the server does not, so `\s` and `\S` are written out.
+ */
+const SPACE_CHARS = "\\t\\n\\v\\f\\r ";
 
 /**
  * Letter escapes that mean the same thing in PCRE and in a JavaScript regex.
@@ -158,17 +174,40 @@ const LINE_TERMINATORS: Readonly<Record<string, string>> = {
  * flags, so ` /abc/i ` is `/abc/i`; an undelimited pattern keeps its
  * whitespace. The engine reads an empty pattern and `"0"` as no pattern.
  * Accepted: the syntax the two dialects share — classes, the common escapes,
- * groups, lookaround, backreferences, named groups. Refused: any other letter
- * escape (`\A`, `\z`, `\h`, `\p`, `\Q`...), POSIX classes, inline flags,
- * atomic and other PCRE-only groups, and flags with no JavaScript counterpart
- * (`x`, `U`, `A`...). Whatever is accepted is then compiled here, so a pattern
- * JavaScript rejects is refused too.
+ * groups, lookaround, backreferences, named groups — and four constructs they
+ * define differently, written as what the server matches: `.` without the `s`
+ * flag is every character but a newline (JavaScript's also stops at a carriage
+ * return and the line separators), `\s` and `\S` are PCRE's six ASCII
+ * whitespace characters (JavaScript's include every Unicode space), `$` without
+ * the `D` flag also matches before a final newline, and `^` and `$` under the
+ * `m` flag turn at a newline only. Refused: any other letter
+ * escape (`\A`, `\z`, `\h`, `\p`, `\Q`...), `\S` inside a class, POSIX
+ * classes, inline flags, atomic and other PCRE-only groups, and flags with no
+ * JavaScript counterpart (`x`, `U`, `A`...). Whatever is accepted is then
+ * compiled here, so a pattern JavaScript rejects is refused too.
  *
  * The literal is written so nothing in the body can end it early: an empty
  * body is `(?:)` (a bare `//` would start a line comment), and a line break,
  * escaped or not, is written as its escape.
  */
 export function pcreToRegex(stored: string): string | undefined {
+  return translatePattern(stored)?.literal;
+}
+
+/** A translated pattern: the literal, whether it has the `u` flag, and whether it uses `\s`, `\d`, `\w` or `\b`. */
+interface TranslatedPattern {
+  readonly literal: string;
+  readonly unicode: boolean;
+  /**
+   * The pattern uses a class escape (`\s`, `\S`, `\d`, `\D`, `\w`, `\W`,
+   * `\b`, `\B`). JavaScript reads those as ASCII with or without `u`; under
+   * `u` some backends read them as Unicode classes and others as ASCII, so a
+   * non-ASCII value is left to the server for such a pattern.
+   */
+  readonly asciiClasses: boolean;
+}
+
+function translatePattern(stored: string): TranslatedPattern | undefined {
   if (stored === "" || stored === "0") return undefined;
   let body = stored;
   let pcreFlags = "";
@@ -188,9 +227,13 @@ export function pcreToRegex(stored: string): string | undefined {
     if (js === undefined) return undefined;
     if (!flags.includes(js)) flags += js;
   }
+  const dotAll = pcreFlags.includes("s");
+  const multiline = pcreFlags.includes("m");
+  const dollarEndOnly = pcreFlags.includes("D");
 
   let source = "";
   let inClass = false;
+  let asciiClasses = false;
   for (let i = 0; i < body.length; i++) {
     const c = body[i]!;
     if (c === "\\") {
@@ -207,7 +250,16 @@ export function pcreToRegex(stored: string): string | undefined {
           i += 2;
           continue;
         }
+        if (next === "s" || next === "S") {
+          // Written out: JavaScript's \s matches every Unicode space, the server's six ASCII characters.
+          if (next === "S" && inClass) return undefined;
+          source += next === "S" ? `[^${SPACE_CHARS}]` : inClass ? SPACE_CHARS : `[${SPACE_CHARS}]`;
+          asciiClasses = true;
+          i++;
+          continue;
+        }
         if (!SAME_ESCAPES.has(next)) return undefined;
+        if ("dDwWbB".includes(next)) asciiClasses = true;
       } else if (/[0-9]/.test(next)) {
         // A single-digit backreference outside a class; octal and multi-digit forms differ.
         if (inClass || next === "0" || /[0-9]/.test(body[i + 2] ?? "")) return undefined;
@@ -229,6 +281,26 @@ export function pcreToRegex(stored: string): string | undefined {
       const after = body.slice(i + 2);
       if (!/^(?::|=|!|<=|<!|<[A-Za-z])/.test(after)) return undefined;
     }
+    if (!inClass) {
+      // The server's `.` stops at a newline only; its `^` and `$` under `m` turn at a newline only.
+      if (c === "." && !dotAll) {
+        source += "[^\\n]";
+        continue;
+      }
+      if (c === "^" && multiline) {
+        // Start, or after any newline, a final one included: the server's ^ matches there too.
+        source += "(?<![^\\n])";
+        continue;
+      }
+      if (c === "$" && multiline) {
+        source += "(?![^\\n])";
+        continue;
+      }
+      if (c === "$" && !dollarEndOnly) {
+        source += "(?=\\n?$)";
+        continue;
+      }
+    }
     source += c === "/" ? "\\/" : (LINE_TERMINATORS[c] ?? c);
   }
   if (source === "") source = "(?:)";
@@ -237,7 +309,7 @@ export function pcreToRegex(stored: string): string | undefined {
   } catch {
     return undefined;
   }
-  return `/${source}/${flags}`;
+  return { literal: `/${source}/${flags}`, unicode: flags.includes("u"), asciiClasses };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,18 +318,52 @@ export function pcreToRegex(stored: string): string | undefined {
 
 /** Which helper declarations the rendered section uses. */
 interface Uses {
+  required: boolean;
   text: boolean;
   ownKeys: boolean;
 }
+
+/**
+ * The input types whose value can be the empty string. A required input of one
+ * of these sent as `""` is refused by the server as missing, as is a required
+ * reference to a uuid-keyed table (`requiredCheck`); every other type already
+ * refuses `""` as the wrong type.
+ */
+const EMPTY_STRING_TYPES: ReadonlySet<string> = new Set(["text", "email", "password", "uuid", "date", "json"]);
+
+/**
+ * The check a required text, email, password, uuid, date or json input
+ * carries. Emitted once, and only when some input needs it.
+ */
+const REQUIRED_HELPER = `/**
+ * The server's required check: a required input sent as the empty string is
+ * refused as missing, before any other check runs, so a required text with a
+ * minimum length reports "Missing param" for "", not the length. Only the
+ * empty string: a blank such as "  " is a value, and every type but text,
+ * email, password, uuid, date and json refuses "" as the wrong type already.
+ */
+const __zodRequired =
+  (name: string) =>
+  (ctx: z.core.ParsePayload<unknown>): void => {
+    if (ctx.value === "") ctx.issues.push({ code: "custom", message: \`Missing param: \${name}\`, input: ctx.value });
+  };
+`;
 
 /**
  * The engine's checks on a text-family input, as the emitted `__zodText` rules
  * literal's members, in the helper's order. Empty when nothing is checked.
  */
 function textRules(type: "text" | "email" | "password", methods: readonly InputMethod[]): string[] {
-  const has = (name: string): boolean => methods.some((m) => m.name === name);
-  // The engine trims a text input unless told not to, and a password and an email always.
-  const trim = type !== "text" || !has("notrim") || has("trim");
+  // The engine trims a text input only when its methods say so: `trim` turns
+  // it on, `notrim` turns it back off, and the last one declared wins. An
+  // email and a password are always trimmed, whatever their methods.
+  let trim = type !== "text";
+  if (type === "text") {
+    for (const m of methods) {
+      if (m.name === "trim") trim = true;
+      else if (m.name === "notrim") trim = false;
+    }
+  }
 
   if (type === "email") {
     // The engine's email input accepts the empty string, and checks the format of anything else.
@@ -269,6 +375,7 @@ function textRules(type: "text" | "email" | "password", methods: readonly InputM
   const prevent: string[] = [];
   let pattern: string | undefined;
   let patternError = "";
+  let patternAscii = false;
   const atLeast: string[] = [];
   let min: number | undefined;
   let max: number | undefined;
@@ -307,8 +414,11 @@ function textRules(type: "text" | "email" | "password", methods: readonly InputM
         break;
       case "pattern":
         if (type === "text") {
-          pattern = pcreToRegex(arg);
+          const translated = translatePattern(arg);
+          pattern = translated?.literal;
           patternError = m.args[1]?.trim() ?? "";
+          // Under u, a class escape reads as Unicode on some backends and ASCII on others.
+          patternAscii = translated !== undefined && translated.unicode && translated.asciiClasses;
         }
         break;
       case "minAlpha":
@@ -329,7 +439,9 @@ function textRules(type: "text" | "email" | "password", methods: readonly InputM
     ...(startsWith !== undefined ? [`startsWith: ${JSON.stringify(startsWith)}`] : []),
     ...(ok !== "" ? [`ok: ${JSON.stringify(ok)}`] : []),
     ...(prevent.length > 0 ? [`prevent: ${JSON.stringify(prevent)}`] : []),
-    ...(pattern !== undefined ? [`pattern: ${pattern}`, ...(patternError !== "" ? [`patternError: ${JSON.stringify(patternError)}`] : [])] : []),
+    ...(pattern !== undefined
+      ? [`pattern: ${pattern}`, ...(patternError !== "" ? [`patternError: ${JSON.stringify(patternError)}`] : []), ...(patternAscii ? ["patternAscii: true"] : [])]
+      : []),
     ...(atLeast.length > 0 ? [`atLeast: [${atLeast.join(", ")}]`] : []),
   ];
   if (checks.length === 0) return [];
@@ -353,7 +465,7 @@ const PASSWORD_CLASSES: Readonly<Record<string, (n: number) => string>> = {
   minLowerAlpha: (n) => `[/[a-z]/g, ${n}, "lowercase letters"]`,
   minUpperAlpha: (n) => `[/[A-Z]/g, ${n}, "uppercase letters"]`,
   minDigit: (n) => `[/[0-9]/g, ${n}, "numbers"]`,
-  minSymbol: (n) => `[/[!-\\/:-@[-\`{-~]/g, ${n}, "punctuation symbols"]`,
+  minSymbol: (n) => `[/[!-\\/:-@[-\`{-~]/g, ${n}, "punctuation symbols, like: $@^&*%^"]`,
 };
 
 /**
@@ -364,12 +476,16 @@ const PASSWORD_CLASSES: Readonly<Record<string, (n: number) => string>> = {
 const TEXT_HELPER = `/**
  * The engine's checks on a text, email or password input, run on the value as
  * the engine checks it — trimmed of the six characters the engine trims (space,
- * tab, newline, carriage return, NUL, vertical tab), and case-folded (ASCII
- * only) before a whitelist, blocked phrase or pattern — while
- * the value itself is left exactly as it will be sent. A password of "" or "0"
- * passes unchecked, as on the server. A pattern without the u flag is matched
- * by the server byte by byte, so a value with a non-ASCII character is left to
- * the server rather than matched character by character here.
+ * tab, newline, carriage return, NUL, vertical tab) when the input declares
+ * \`trim\` (an email and a password always), and case-folded (ASCII only)
+ * before a whitelist, blocked phrase or pattern — while the value itself is
+ * left exactly as it will be sent. A password of "" or "0" passes unchecked, as
+ * on the server. A pattern without the u flag is matched by the server byte by
+ * byte on some backends and character by character on others, so a value with
+ * a non-ASCII character is left to the server rather than matched either way
+ * here; with u every backend, and JavaScript, counts characters, but a class
+ * escape (\\s, \\d, \\w, \\b) then reads as Unicode on some backends and ASCII
+ * on others, so such a pattern leaves a non-ASCII value to the server too.
  */
 const __zodText =
   (rules: {
@@ -384,6 +500,7 @@ const __zodText =
     readonly prevent?: readonly string[];
     readonly pattern?: RegExp;
     readonly patternError?: string;
+    readonly patternAscii?: boolean;
     readonly atLeast?: readonly (readonly [RegExp, number, string])[];
   }) =>
   (ctx: z.core.ParsePayload<string>): void => {
@@ -402,7 +519,7 @@ const __zodText =
     const length = [...v].length;
     if (rules.min !== undefined && length < rules.min) fail(\`Input does not meet minimum length requirement of \${rules.min} characters\`);
     if (rules.max !== undefined && length > rules.max) fail(\`Input does not meet maximum length requirement of \${rules.max} characters\`);
-    if (rules.startsWith !== undefined && !v.startsWith(rules.startsWith)) fail(\`Invalid format detected. Expected \${rules.startsWith}\`);
+    if (rules.startsWith !== undefined && !v.startsWith(rules.startsWith)) fail(\`Invalid format detected. Expected \${rules.startsWith} but received \${v}\`);
     if (rules.fold === "lower") v = lower(v);
     if (rules.fold === "upper") v = v.replace(/[a-z]+/g, (c) => c.toUpperCase());
     if (rules.ok !== undefined) {
@@ -410,7 +527,11 @@ const __zodText =
       if ([...v].some((c) => !ok.includes(lower(c)))) fail("Invalid characters detected.");
     }
     if (rules.prevent?.some((phrase) => v.includes(phrase)) === true) fail("Invalid characters detected.");
-    if (rules.pattern !== undefined && (rules.pattern.unicode || !/[^\\x00-\\x7F]/.test(v)) && !rules.pattern.test(v)) {
+    if (
+      rules.pattern !== undefined &&
+      (!/[^\\x00-\\x7F]/.test(v) || (rules.pattern.unicode && rules.patternAscii !== true)) &&
+      !rules.pattern.test(v)
+    ) {
       fail(rules.patternError ?? "Invalid pattern.");
     }
     for (const [re, n, what] of rules.atLeast ?? []) {
@@ -456,16 +577,37 @@ function numberBounds(d: ValueInput): string {
   return out;
 }
 
+/**
+ * The `.check()` arguments `d` starts with: the server's required check when `d`
+ * is a required single value of a type that admits the empty string, else none.
+ * A list is checked as a list (its elements are never "required"). Records the
+ * helper's use.
+ */
+function requiredCheck(d: ValueInput, uses: Uses): string[] {
+  const admitsEmpty = EMPTY_STRING_TYPES.has(d.type) || (d.type === "tableRef" && d.keyType === "uuid");
+  if (!d.required || d.list !== false || !admitsEmpty) return [];
+  uses.required = true;
+  return [`__zodRequired(${JSON.stringify(d.name)})`];
+}
+
+/** `base`, with `checks` applied when there are any. */
+function withChecks(base: string, checks: readonly string[]): string {
+  return checks.length === 0 ? base : `${base}.check(${checks.join(", ")})`;
+}
+
 /** One value, before its list and nullable flags: the base type and its checks. */
 function baseSchema(d: ValueInput, indent: string, uses: Uses): string {
   switch (d.type) {
     case "text":
     case "email":
     case "password": {
+      const checks = requiredCheck(d, uses);
       const rules = textRules(d.type, d.methods);
-      if (rules.length === 0) return "z.string()";
-      uses.text = true;
-      return `z.string().check(__zodText({ ${rules.join(", ")} }))`;
+      if (rules.length > 0) {
+        uses.text = true;
+        checks.push(`__zodText({ ${rules.join(", ")} })`);
+      }
+      return withChecks("z.string()", checks);
     }
     case "int":
       return `z.int()${numberBounds(d)}`;
@@ -476,15 +618,16 @@ function baseSchema(d: ValueInput, indent: string, uses: Uses): string {
       if (d.values.every((v) => typeof v === "string")) return `z.enum(${JSON.stringify(d.values)})`;
       return `z.literal([${d.values.map((v) => (typeof v === "number" ? String(v) : JSON.stringify(v))).join(", ")}])`;
     case "vector":
-      return "z.array(z.number())";
+      // The engine refuses a vector with more or fewer numbers than its size.
+      return Number.isInteger(d.size) && d.size > 0 ? `z.array(z.number()).length(${d.size})` : "z.array(z.number())";
     case "tableRef":
-      return d.keyType === "uuid" ? UUID : `z.int()${numberBounds(d)}`;
+      return d.keyType === "uuid" ? withChecks(UUID, requiredCheck(d, uses)) : `z.int()${numberBounds(d)}`;
     case "obj":
       return objectSchema(d.children, indent, uses);
     case "unknown":
       return "z.unknown()";
     default:
-      return PLAIN[d.type] ?? "z.unknown()";
+      return withChecks(PLAIN[d.type] ?? "z.unknown()", requiredCheck(d, uses));
   }
 }
 
@@ -550,7 +693,7 @@ function objectSchema(inputs: readonly InputDescription[], indent: string, uses:
   const object = rows.length === 0 ? `${factory}({})` : `${factory}({\n${rows.join("\n")}\n${indent}})`;
   if (inherited.length === 0) return object;
   uses.ownKeys = true;
-  return `${object}.check(__zodOwnKeys(${JSON.stringify(inherited)}))`;
+  return withChecks(object, [`__zodOwnKeys(${JSON.stringify(inherited)})`]);
 }
 
 /** One exported map, built inside a pure factory so an unused map costs a bundle nothing. */
@@ -577,7 +720,7 @@ function checks(map: string, core: string, sets: readonly RouteInputSet[]): stri
  * Pure: the same description renders the same text.
  */
 export function renderZodSection(inputs: RouteInputs): RoutesManifestSection {
-  const uses: Uses = { text: false, ownKeys: false };
+  const uses: Uses = { required: false, text: false, ownKeys: false };
   const maps = [
     schemaMap(
       "ROUTE_SCHEMAS",
@@ -605,7 +748,7 @@ export function renderZodSection(inputs: RouteInputs): RoutesManifestSection {
     ),
   ];
 
-  const helpers = [...(uses.text ? [TEXT_HELPER] : []), ...(uses.ownKeys ? [OWN_KEYS_HELPER] : [])];
+  const helpers = [...(uses.required ? [REQUIRED_HELPER] : []), ...(uses.text ? [TEXT_HELPER] : []), ...(uses.ownKeys ? [OWN_KEYS_HELPER] : [])];
   const source = `${helpers.map((h) => `${h}\n`).join("")}${maps.join("\n")}
 /**
  * The check that each schema above and the type for its key are the same type,
