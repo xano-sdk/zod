@@ -1,6 +1,6 @@
 {
   "name": "@xano-sdk/zod",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Generates zod schemas for every endpoint, realtime channel, and realtime message input in a Xano SDK project's routes.gen.ts, from the same description as its TypeScript input types, so the two cannot drift.",
   "type": "module",
   "license": "MIT",
