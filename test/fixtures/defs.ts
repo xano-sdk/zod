@@ -144,6 +144,7 @@ export const validated = query({
   apiGroup: api,
   input: {
     handle: input.text({ required: true, methods: ["min:3", "max:8", "startsWith:@"] }),
+    padded: input.text({ methods: ["trim", "min:3", "max:8", "startsWith:@"] }),
     slug: input.text({ methods: ["pattern:^[a-z0-9-]+$"] }),
     code: input.text({ methods: ["trim", "upper", "max:4", "pattern:/^[A-Z]+$/"] }),
     pin: input.text({ methods: ["digitOk"] }),
@@ -158,6 +159,7 @@ export const validated = query({
     shouted: input.text({ methods: storedMethods("upper", "prevent:ROOT") }),
     pair: input.text({ methods: ["pattern:/^.{2}$/"] }),
     pair_u: input.text({ methods: ["pattern:/^.{2}$/u"] }),
+    word_u: input.text({ methods: ["pattern:/^\\w+$/u"] }),
     anything: input.text({ methods: ["pattern:##"] }),
   },
   stack: [],

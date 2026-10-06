@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import plugin from "../../src/plugin.js";
 import { routeInputWorkspace } from "../fixtures/defs.js";
-import { compose, planWorkspace } from "./sdk-pipeline.js";
+import { compose, planWorkspace, type Exportable } from "./sdk-pipeline.js";
 
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -20,11 +20,11 @@ export const ROOT = fileURLToPath(new URL("../../", import.meta.url));
  * The SDK version handed to the hook: this module's peer floor, the release
  * that ships the hook. The build under test is that release's contents.
  */
-const SDK_VERSION = "1.0.6";
+export const SDK_VERSION = "1.0.6";
 
-/** The composed `routes.gen.ts` text for the fixture workspace. */
-export async function emittedRoutesFile(): Promise<string> {
-  const { inputs, core } = await planWorkspace(routeInputWorkspace());
+/** The composed `routes.gen.ts` text for `ws`, the fixture workspace by default. */
+export async function emittedRoutesFile(ws: Exportable = routeInputWorkspace()): Promise<string> {
+  const { inputs, core } = await planWorkspace(ws);
   const section = plugin.routesManifest!({ inputs, config: { enabled: true }, sdkVersion: SDK_VERSION });
   return compose(core, section);
 }

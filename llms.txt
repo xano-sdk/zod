@@ -83,23 +83,30 @@ From the package itself (rarely needed): `renderZodSection(inputs)` and
 ## What a schema checks
 
 - Types: `text`/`date` → `z.string()`; `email` → string with the server's email
-  format (`""` passes); `password` → string; `int` → `z.int()`; `decimal` →
+  format (`""` passes on an optional input); `password` → string; `int` → `z.int()`; `decimal` →
   `z.number()`; `timestamp` → number (epoch ms); `bool` → `z.boolean()`; `uuid` →
-  any 8-4-4-4-12 hex or `""`; `enum` → `z.enum` / `z.literal`; `json` →
-  `z.unknown()`; `vector` → `z.array(z.number())`; `object` → nested `z.object`;
+  any 8-4-4-4-12 hex, or `""` on an optional input; `enum` → `z.enum` /
+  `z.literal`; `json` → `z.unknown()`; `vector` → `z.array(z.number())` of the
+  declared size; `object` → nested `z.object`;
   `tableRef` → the id (`z.int()` or uuid); `dbLink` → the linked table's columns
   spread into the object; file upload → any non-null value; image/video/audio/
   attachment → the stored file-reference object; geo → `{ type, data }`.
 - Flags: list → `z.array(...)` with list `min`/`max`; nullable → `.nullable()`
   on the list, not the elements; not required → `.optional()`. A required input
-  with a default stays required (no `.default()`).
+  with a default stays required (no `.default()`). A required `text`, `email`,
+  `password`, `uuid`, `date` or `json`, or a required `tableRef` to a uuid-keyed
+  table, refuses `""` as `Missing param: <name>` before any other check, as the
+  server does; `"  "` is a value, and the
+  elements of a required list are not themselves required.
 - Methods checked: `min`/`max` (length on text, value on numbers), `startsWith`,
   `pattern`, `alphaOk`/`digitOk`/`ok`, `prevent`, and password `minAlpha`,
   `minLowerAlpha`, `minUpperAlpha`, `minDigit`, `minSymbol`. Messages match the
   server's.
-- Text checks run on the value as the server measures it: trimmed (text unless
-  `notrim`; password and email always) and case-folded by `lower`/`upper` before the
-  whitelist, `prevent` and `pattern`. The value sent is not changed.
+- Text checks run on the value as the server measures it: trimmed only when the
+  text input declares `trim` (the last of `trim`/`notrim` wins; password and
+  email always) and case-folded by `lower`/`upper` before the whitelist,
+  `prevent` and `pattern`, whatever the method order. The value sent is not
+  changed.
 
 ## Constraints for agents (read before using)
 
@@ -116,13 +123,35 @@ From the package itself (rarely needed): `renderZodSection(inputs)` and
   server applies them. Do not add `.trim()`, `.toLowerCase()` or similar to the
   value you send to "match" the server.
 - **Skipped, still checked by the server:** a `pattern` using syntax JavaScript
-  reads differently (`\A`, `\z`, `\h`, `\p{...}`, POSIX classes, inline flags,
-  atomic groups, flags with no JS equivalent); a pattern without the `u` flag
-  against a value with a non-ASCII character (the server matches bytes); a
-  `vector`'s size; disabled or unknown methods; an input named `__proto__`
+  reads differently (`\A`, `\z`, `\h`, `\p{...}`, `\S` inside a class, POSIX
+  classes, inline flags, atomic groups, flags with no JS equivalent); a pattern
+  without the `u` flag against a value with a non-ASCII character (some
+  backends match bytes there, others characters), and a `u` pattern that uses
+  `\s`, `\d`, `\w` or `\b` against such a value (some backends read those as
+  Unicode classes under `u`, others as ASCII); a `date`'s format (the server
+  parses permissively); the members of a stored file reference and a file
+  upload sent as JSON; an `enum` with no values (the server accepts anything;
+  the type is `never`); disabled or unknown methods; an input named `__proto__`
   (recent zod 4 releases skip that key on purpose).
+- **Translated to what the server matches:** `.` without `s` (stops at a newline
+  only), `\s`/`\S` outside a class (the six ASCII whitespace characters), `$`
+  without `D` (also matches before a final newline), and `^`/`$` under `m` (turn
+  at a newline only).
+- **An omitted optional input is not checked.** The server runs an input's
+  methods on its default when the input is left out, so an optional text with
+  `min`, `startsWith` or a pattern `""` fails, an optional list with a list
+  `min`, or an optional object with a required member, is refused when omitted
+  unless it declares a default that passes. Declare it required or give it such
+  a default; the schema cannot see the default.
+- **The schema refuses what the server coerces:** `"100"` on an int, `"yes"` on
+  a bool, an ISO string on a timestamp, a bare value for a list, `null` or `""`
+  on an optional input. Send the core type.
+- **A pattern stored without its error text** (`"pattern:..."` or
+  `{ name: "pattern", arg: [pattern] }`) is refused by the server for every
+  value. Store `{ name: "pattern", arg: [pattern, message] }`.
 - **Password: `""` and `"0"` pass unchecked**, as on the server, whatever the
-  length and strength rules.
+  length and strength rules — unless the input is required, when `""` is
+  missing.
 - **The server is the authority.** Handle a server rejection even when `parse`
   passed.
 - **Inputs only.** No response schemas; use `InferResponse` on an `import type`

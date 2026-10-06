@@ -94,7 +94,7 @@ describe.each([true, false])("the emitted routes.gen.ts with exactOptionalProper
   });
 
   it("fails when a schema makes a required key optional", () => {
-    const source = mutate("    body: z.string(),\n", "    body: z.string().optional(),\n");
+    const source = mutate('    body: z.string().check(__zodRequired("body")),\n', '    body: z.string().check(__zodRequired("body")).optional(),\n');
     expect(failingLines(source, tsc(source, exact))).toEqual([
       '__ZodExpect<"rooms/{room_id} send", __ZodSame<z.output<(typeof MESSAGE_SCHEMAS)["rooms/{room_id} send"]>, MessageInputs["rooms/{room_id} send"]>>,',
     ]);
