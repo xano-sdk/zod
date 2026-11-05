@@ -38,6 +38,7 @@ const WHY = {
   empty_enum: "an enum with no values accepts anything on the server; the core type is never",
   file_ref: "the server requires every member of a stored file reference; the type lists them optional",
   file_upload: "a file upload cannot be sent as JSON; the schema admits any value but null",
+  geo_object: "the server also takes the `{ type, data }` object; the core type is WKT text, and a schema may not transform a value",
   date: "the server parses a date permissively and refuses what it cannot read; the schema takes any string",
   non_ascii: "a pattern without the u flag is matched byte by byte on some backends and character by character on others, so the schema leaves a non-ASCII value to the server",
   dollar: "without the D flag some backends let $ match before a final newline and others do not; the schema takes the lenient reading",
@@ -269,6 +270,10 @@ const CASES: readonly Case[] = [
   ...coerced("att", ""),
   ...agree("fl", null, MISSING, ""),
   ...gap("file_upload", "pass", "fail", "fl", "str", {}, 1),
+  // ── geo ──
+  ...agree("geo_pt", "POINT(10 20)", null, 1, {}, MISSING),
+  ...gap("geo_object", "fail", "pass", "geo_pt", { type: "point", data: { lng: 10, lat: 20 } }),
+  ...agree("geo_poly", "POLYGON((0 0, 1 0, 1 1, 0 0))", null, MISSING),
   // ── a dbLink's columns, as the request body ──
   ...agree(DBL, { name: "ok" }, { name: "" }, { name: "x" }, {}, { name: "ok", note: " abcd " }, { name: "ok", note: " abc " }),
   ...coerced(DBL, { name: "ok", qty: "5" }),

@@ -13,8 +13,8 @@
 npx xanosdk marketplace install zod
 ```
 
-Peers: `@xano/sdk` `>=1.0.6 <2.0.0` and `zod` `^4.0.0`. Built and tested against
-`@xano/sdk` 1.0.6 and `zod` 4.6.5. The suite renders a real `routes.gen.ts`
+Peers: `@xano/sdk` `>=1.0.16 <2.0.0` and `zod` `^4.0.0`. Built and tested against
+`@xano/sdk` 1.0.19 and `zod` 4.6.5. The suite renders a real `routes.gen.ts`
 through the SDK, typechecks it with real zod (with and without
 `exactOptionalPropertyTypes`), parses with it, and bundles it. That covers the
 tested versions; the rest of each range is declared, not CI-verified.
@@ -90,7 +90,8 @@ From the package itself (rarely needed): `renderZodSection(inputs)` and
   declared size; `object` → nested `z.object`;
   `tableRef` → the id (`z.int()` or uuid); `dbLink` → the linked table's columns
   spread into the object; file upload → any non-null value; image/video/audio/
-  attachment → the stored file-reference object; geo → `{ type, data }`.
+  attachment → the stored file-reference object; geo → WKT text (the
+  server also takes `{ type, data }`; the schema refuses it).
 - Flags: list → `z.array(...)` with list `min`/`max`; nullable → `.nullable()`
   on the list, not the elements; not required → `.optional()`. A required input
   with a default stays required (no `.default()`). A required `text`, `email`,
@@ -130,7 +131,7 @@ From the package itself (rarely needed): `renderZodSection(inputs)` and
   `\s`, `\d`, `\w` or `\b` against such a value (some backends read those as
   Unicode classes under `u`, others as ASCII); a `date`'s format (the server
   parses permissively); the members of a stored file reference and a file
-  upload sent as JSON; an `enum` with no values (the server accepts anything;
+  upload sent as JSON; a geo value sent as an object; an `enum` with no values (the server accepts anything;
   the type is `never`); disabled or unknown methods; an input named `__proto__`
   (recent zod 4 releases skip that key on purpose).
 - **Translated to what the server matches:** `.` without `s` (stops at a newline

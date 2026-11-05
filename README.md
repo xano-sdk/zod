@@ -6,8 +6,8 @@ Zod schemas for every endpoint, realtime channel and realtime message input in a
 typecheck, so the schema and the type cannot drift.
 
 > **Status: 1.0.x.** A toolchain module for the Xano SDK. Peers: `@xano/sdk`
-> `>=1.0.6 <2.0.0` and `zod` `^4.0.0`. Built and tested against `@xano/sdk`
-> 1.0.6 and `zod` 4.6.5.
+> `>=1.0.16 <2.0.0` and `zod` `^4.0.0`. Built and tested against `@xano/sdk`
+> 1.0.19 and `zod` 4.6.5.
 
 ## Use it
 
@@ -161,7 +161,7 @@ reject a value the server would accept.
 | `dbLink` | the linked table's columns, spread into the surrounding object (as the server expands them); an open object when the columns are unknown |
 | `file` (upload) | any value except `null` / `undefined` |
 | `image`, `video`, `audio`, `attachment` | an object of the stored file reference's optional members |
-| geo types | `{ type, data }` with `{ lng, lat }` positions |
+| geo types | WKT text, such as `POINT(10 20)`; the `{ type, data }` object is refused (see below) |
 
 Across all of them: a list input becomes `z.array(...)` with its list `min` /
 `max`; a nullable input adds `.nullable()` (to the list, not its elements); an
@@ -206,6 +206,9 @@ each schema's verdict with the server's.
   refused when left out, unless the input declares a default that passes. The
   description this module reads carries no default, so the schema accepts the
   omission. Declare such an input required, or give it a default that passes.
+- **A geo value sent as an object is refused.** The server takes both WKT text
+  and the `{ type, data }` object. The core type is WKT text, so the schema takes
+  only that. Send `POINT(10 20)`, not `{ type: "point", data: { lng: 10, lat: 20 } }`.
 - **Values the server coerces are refused.** The server reads `"100"` as `100`
   on an int and truncates `12.5` to `12`, reads `"yes"`, `1` and `"false"` as a
   bool, an ISO string on a timestamp, a number on a date, `"1"` on a numeric
@@ -301,9 +304,8 @@ but your own code may import it too. Remove it yourself if nothing else does.
 
 ## Versioning
 
-`@xano-sdk/zod` releases as `1.0.x`. The `@xano/sdk` peer floor is the first SDK
-that lets a toolchain module add a section to `routes.gen.ts`, because on an
-older SDK this module would load and do nothing. The ceiling is the SDK's next
+`@xano-sdk/zod` releases as `1.0.x`. The `@xano/sdk` peer floor is 1.0.16, the first SDK
+whose request types these schemas match: on an older SDK the emitted file does not compile. The ceiling is the SDK's next
 major. The `zod` peer is zod 4's classic API; zod 3 and `zod/mini` are not
 supported.
 

@@ -17,10 +17,10 @@ import { compose, planWorkspace, type Exportable } from "./sdk-pipeline.js";
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 /**
- * The SDK version handed to the hook: this module's peer floor, the release
- * that ships the hook. The build under test is that release's contents.
+ * The SDK version handed to the hook: this module's peer floor. The build under
+ * test is the installed SDK.
  */
-export const SDK_VERSION = "1.0.6";
+export const SDK_VERSION = "1.0.16";
 
 /** The composed `routes.gen.ts` text for `ws`, the fixture workspace by default. */
 export async function emittedRoutesFile(ws: Exportable = routeInputWorkspace()): Promise<string> {

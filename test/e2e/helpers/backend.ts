@@ -7,7 +7,8 @@
  * machine through the installed SDK's own CLI, as a project would deploy it.
  *
  * The CLI's project is the directory holding the entry's nearest package.json,
- * so the fixture is copied into a throwaway project under `node_modules/.cache/`
+ * so the fixture is copied into a throwaway project in `.e2e-project/`, outside
+ * `node_modules` because Node will not strip types from files under it,
  * with a package.json of its own: `@xano/sdk` resolves from there to the install
  * this repo tests against, and the engine pin the first deploy writes lands in
  * that package.json rather than this repo's. The directory is stable across
@@ -31,7 +32,7 @@ export interface Backend {
 
 const BIN = join(ROOT, "node_modules/@xano/sdk/dist/bin.js");
 const FIXTURE = fileURLToPath(new URL("../fixtures/defs.ts", import.meta.url));
-const PROJECT = join(ROOT, "node_modules/.cache/e2e-project");
+const PROJECT = join(ROOT, ".e2e-project");
 
 /** A backend serving the fixture: the one named by `XANO_E2E_HOST`, else a local engine deployed now. */
 export function startBackend(): Backend {

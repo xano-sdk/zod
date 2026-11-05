@@ -66,21 +66,19 @@ const OBJECT_MEMBERS: ReadonlySet<string> = new Set([
  */
 const FILE_REF =
   "z.object({ path: z.string().optional(), name: z.string().optional(), type: z.string().optional(), " +
-  "size: z.number().optional(), access: z.string().optional(), meta: z.unknown().optional(), url: z.string().optional() })";
+  "size: z.number().optional(), mime: z.string().optional(), access: z.string().optional(), meta: z.unknown().optional(), url: z.string().optional() })";
 
-/** A file upload: the core type is an opaque marker, so anything but a missing value passes. */
-const FILE_UPLOAD = `z.custom<{ readonly __fileUpload?: never }>((v) => v !== undefined && v !== null, "Expected a file")`;
+/** A file upload: the core type is `Blob`, and anything but a missing value passes. */
+const FILE_UPLOAD = `z.custom<Blob>((v) => v !== undefined && v !== null, "Expected a file")`;
 
-const POSITION = "z.object({ lng: z.number(), lat: z.number() })";
-
-/** Each stored geo type: its `type` name and its `data` nesting. */
+/** Each geo type: the core type writes them all as WKT text, such as `POINT(10 20)`. */
 const GEO: Readonly<Record<string, string>> = {
-  geo_point: `z.object({ type: z.literal("point"), data: ${POSITION} })`,
-  geo_multipoint: `z.object({ type: z.literal("points"), data: z.array(${POSITION}) })`,
-  geo_linestring: `z.object({ type: z.literal("path"), data: z.array(${POSITION}) })`,
-  geo_multilinestring: `z.object({ type: z.literal("paths"), data: z.array(z.array(${POSITION})) })`,
-  geo_polygon: `z.object({ type: z.literal("poly"), data: z.array(${POSITION}) })`,
-  geo_multipolygon: `z.object({ type: z.literal("polys"), data: z.array(z.array(${POSITION})) })`,
+  geo_point: "z.string()",
+  geo_multipoint: "z.string()",
+  geo_linestring: "z.string()",
+  geo_multilinestring: "z.string()",
+  geo_polygon: "z.string()",
+  geo_multipolygon: "z.string()",
 };
 
 /**
