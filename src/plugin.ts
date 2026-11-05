@@ -38,12 +38,11 @@ const PACKAGE_NAME = "@xano-sdk/zod";
  * `peerDependencies` range in `package.json`. The test suite asserts the two
  * agree.
  *
- * The floor is the first SDK that lets a toolchain module add a section to
- * `routes.gen.ts`. Every hook on the toolchain contract is optional, so on an
- * older SDK this module would load, register, and contribute NOTHING, in
- * silence — which is why the floor is not simply the first SDK with a loader.
+ * The floor is the first SDK whose request types these schemas match: from
+ * 1.0.16, geo inputs are WKT text, uploads are `Blob` and file references carry
+ * `mime`. On an older SDK the file this module emits does not compile.
  */
-const MIN_SDK = "1.0.6";
+const MIN_SDK = "1.0.16";
 /** Exclusive upper bound. The range is widened deliberately, one major at a time. */
 const MAX_SDK_EXCLUSIVE = "2.0.0";
 

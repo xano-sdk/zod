@@ -36,7 +36,7 @@ Before committing: `npm run typecheck && npm run lint && npm test`. Before
 changing what a schema checks: `npm run test:e2e` too (below). It needs a
 machine that can run a Xano Engine, or `XANO_E2E_HOST` naming a backend that
 already serves `test/e2e/fixtures/defs.ts` (deploy that file as a project's
-`xano/index.ts`; `node_modules/.cache/e2e-project/` holds one after a local
+`xano/index.ts`; `.e2e-project/` holds one after a local
 run). When neither is reachable, say so and stop; never report the step as done.
 
 To test against unreleased SDK work, install a tarball built in `sdk-dev`
@@ -73,7 +73,7 @@ A later plain `npm install` or `npm ci` puts the pinned SDK back.
   method, plus a dbLink); `helpers/backend.ts` deploys it to a Xano Engine on
   this machine through the installed SDK's own CLI (or uses `XANO_E2E_HOST`, a
   backend already serving it, such as a cloud ephemeral deployed from the
-  throwaway project under `node_modules/.cache/e2e-project/`); `parity.e2e.ts`
+  throwaway project under `.e2e-project/`); `parity.e2e.ts`
   sends each case to the schema and the server and compares the verdicts, and
   the messages where the schema's are this module's own. Cases the two are
   known to disagree on carry the reason, and the suite asserts that exact
@@ -151,7 +151,7 @@ Each one fails in a USER's project, not here, unless a test catches it.
   omitted optional input whose default fails its methods (the description
   carries no default), a pattern stored without its error text (the server
   refuses every value), the members of a stored file reference and a file
-  upload sent as JSON, a date's format, an enum with no values. Each is in
+  upload sent as JSON, a geo value sent as an object, a date's format, an enum with no values. Each is in
   README's "What a schema does not do" and in `llms.txt`. Closing one means
   changing `render.ts`, the suite's expectation and both docs in one commit.
 - **The hook is pure and synchronous.** `routesManifest` touches no filesystem
@@ -188,16 +188,17 @@ cannot find.
 Consequences:
 
 - The suites need an SDK build that contains the `routesManifest` hook: the
-  peer floor (`1.0.6`, the `devDependencies` pin) or later, or a tarball of
+  peer floor (`1.0.16`) or later, or a tarball of
   `sdk-dev` (Commands above).
 - A refactor in the SDK that renames those functions breaks the
   helper, not the module. Fix the helper, not the suites.
 
 ## The peer range
 
-- `@xano/sdk`: `>=1.0.6 <2.0.0`. The floor is the first SDK with the
-  `routesManifest` hook. Every toolchain hook is optional, so on an older SDK the
-  module would load, register and contribute nothing, silently. Raise the floor
+- `@xano/sdk`: `>=1.0.16 <2.0.0`. The floor is the first SDK whose request types
+  the emitted schemas match: 1.0.16 made geo inputs WKT text, uploads `Blob`, and
+  added `mime` to file references. The emitted file fails to compile on 1.0.15.
+  Raise the floor
   only when a newer SDK type or behavior becomes load-bearing, and verify it by
   installing that version and running the suite. The ceiling is the next major.
   `MIN_SDK` / `MAX_SDK_EXCLUSIVE` in `src/plugin.ts` must match `package.json`
@@ -206,7 +207,7 @@ Consequences:
   `z.guid()`, `.check()`, `z.core.ParsePayload`). The SDK adds it to the user's
   project as a direct dependency on install.
 - `devDependencies` pin the TESTED versions exactly, no caret: `zod` `4.6.5`,
-  `@xano/sdk` `1.0.6`. README.md and
+  `@xano/sdk` `1.0.19`. README.md and
   llms.txt state both the ranges and the tested versions. Change all three in the
   same commit.
 

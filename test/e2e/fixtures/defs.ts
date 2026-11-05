@@ -156,6 +156,9 @@ export const declarations: Readonly<Record<string, InputDescriptor>> = {
   img: input.image(),
   att: input.attachment(),
   fl: input.file(),
+  // ── geo ──
+  geo_pt: input.geo.point({ required: true }),
+  geo_poly: input.geo.polygon({ required: true }),
 };
 
 const endpoints = Object.entries(declarations).map(([name, v]) =>

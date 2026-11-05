@@ -39,8 +39,8 @@ describe("renderZodSection: one expression per described type", () => {
     ["numeric enum", { type: "enum", values: [1, 2] }, "z.literal([1, 2])"],
     ["empty enum", { type: "enum", values: [] }, "z.never()"],
     ["unknown", { type: "unknown", storedType: "weird" }, "z.unknown()"],
-    ["geo_point", { type: "geo_point" }, 'z.object({ type: z.literal("point"), data: z.object({ lng: z.number(), lat: z.number() }) })'],
-    ["geo_multipolygon", { type: "geo_multipolygon" }, 'z.object({ type: z.literal("polys"), data: z.array(z.array(z.object({ lng: z.number(), lat: z.number() }))) })'],
+    ["geo_point", { type: "geo_point" }, "z.string()"],
+    ["geo_multipolygon", { type: "geo_multipolygon" }, "z.string()"],
   ])("%s", (_label, rest, expected) => {
     expect(row([inp("v", rest)], "v")).toBe(`v: ${expected}.optional(),`);
   });
@@ -48,7 +48,7 @@ describe("renderZodSection: one expression per described type", () => {
   it("writes a file reference as an object of its optional members, and an upload as an opaque value", () => {
     expect(row([inp("v", { type: "blob_img" }, { required: true })], "v")).toMatch(/^v: z\.object\(\{ path: z\.string\(\)\.optional\(\), .*url: z\.string\(\)\.optional\(\) \}\),$/);
     expect(row([inp("v", { type: "file" }, { required: true })], "v")).toBe(
-      'v: z.custom<{ readonly __fileUpload?: never }>((v) => v !== undefined && v !== null, "Expected a file"),',
+      'v: z.custom<Blob>((v) => v !== undefined && v !== null, "Expected a file"),',
     );
   });
 

@@ -27,13 +27,13 @@ describe("routesManifest", () => {
   };
 
   it("returns the rendered section, importing z from zod", () => {
-    const section = plugin.routesManifest?.({ inputs, config: { enabled: true }, sdkVersion: "1.0.6" });
+    const section = plugin.routesManifest?.({ inputs, config: { enabled: true }, sdkVersion: "1.0.16" });
     expect(section?.imports).toEqual([{ from: "zod", names: ["z"] }]);
     expect(section).toEqual(renderZodSection(inputs));
   });
 
-  it.each(["1.0.5", "2.0.0"])("refuses SDK %s, outside the peer range, before rendering", (sdkVersion) => {
-    expect(() => plugin.routesManifest?.({ inputs, config: {}, sdkVersion })).toThrow(/requires @xano\/sdk >=1\.0\.6 <2\.0\.0/);
+  it.each(["1.0.15", "2.0.0"])("refuses SDK %s, outside the peer range, before rendering", (sdkVersion) => {
+    expect(() => plugin.routesManifest?.({ inputs, config: {}, sdkVersion })).toThrow(/requires @xano\/sdk >=1\.0\.16 <2\.0\.0/);
   });
 
   it("asks no questions", () => {
@@ -42,15 +42,15 @@ describe("routesManifest", () => {
 });
 
 describe("assertSdkVersion", () => {
-  it.each(["1.0.6", "1.0.7", "1.9.99"])("accepts %s", (v) => {
+  it.each(["1.0.16", "1.0.19", "1.9.99"])("accepts %s", (v) => {
     expect(() => assertSdkVersion(v)).not.toThrow();
   });
 
-  it.each(["1.0.5", "1.0.0", "0.9.0", "2.0.0", "3.1.0"])("refuses %s, naming the range", (v) => {
-    expect(() => assertSdkVersion(v)).toThrow(/@xano-sdk\/zod requires @xano\/sdk >=1\.0\.6 <2\.0\.0/);
+  it.each(["1.0.15", "1.0.0", "0.9.0", "2.0.0", "3.1.0"])("refuses %s, naming the range", (v) => {
+    expect(() => assertSdkVersion(v)).toThrow(/@xano-sdk\/zod requires @xano\/sdk >=1\.0\.16 <2\.0\.0/);
   });
 
-  it.each(["0.0.0-dev", "1.0.5-beta.1", "not-a-version", ""])("lets %j through (prerelease or unparsable)", (v) => {
+  it.each(["0.0.0-dev", "1.0.15-beta.1", "not-a-version", ""])("lets %j through (prerelease or unparsable)", (v) => {
     expect(() => assertSdkVersion(v)).not.toThrow();
   });
 });

@@ -5,3 +5,4 @@ dist/
 coverage/
 *.tgz
 __pycache__/
+.e2e-project/
